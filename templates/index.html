@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raster → Wektor</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<style>
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+body { background:#f0f2f5; font-family:system-ui,sans-serif; }
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.page-header { background:linear-gradient(135deg,#1a1a2e,#16213e 55%,#0f3460); color:#fff; padding:1.8rem 0 1.5rem; margin-bottom:1.6rem; }
+.page-header h1 { font-size:1.8rem; font-weight:700; letter-spacing:-.4px; margin-bottom:.25rem; }
+.page-header p  { opacity:.7; margin:0; font-size:.93rem; }
+
+/* ── Cards ────────────────────────────────────────────────────────────────── */
+:root {
+  --bs-card-border-color: #dde1e7;
+  --bs-card-border-radius: 10px;
+  --bs-card-cap-bg: #f5f6f8;
+  --bs-card-cap-padding-y: .65rem;
+  --bs-card-cap-padding-x: 1.1rem;
+  --bs-card-inner-border-radius: 9px;
+}
+.card { margin-bottom:.9rem; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+.card-header { font-weight:600; font-size:.92rem; color:#374151; display:flex; align-items:center; gap:.4rem; }
+.card-header .s-icon { color:#6366f1; font-size:1rem; }
+.card-body  { padding:1.1rem 1.2rem; }
+
+/* ── Forms ───────────────────────────────────────────────────────────────── */
+label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-size:.86rem; font-weight:500; color:#374151; }
+.form-control,.form-select { font-size:.9rem; border-color:#d1d5db; }
+.form-control:focus,.form-select:focus { border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.12); }
+.form-check-input:checked { background-color:#6366f1; border-color:#6366f1; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn-primary  { background:#6366f1; border-color:#6366f1; }
+.btn-primary:hover  { background:#4f46e5; border-color:#4f46e5; }
+.btn-success  { background:#059669; border-color:#059669; }
+.btn-success:hover  { background:#047857; border-color:#047857; }
+
+/* ── Help badge ──────────────────────────────────────────────────────────── */
+.help-btn {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:16px; height:16px; border-radius:50%; border:1.5px solid #9ca3af;
+  color:#6b7280; font-size:9px; font-weight:700; cursor:help;
+  margin-left:4px; flex-shrink:0; font-style:normal; line-height:1;
+}
+.help-btn:hover { border-color:#6366f1; color:#6366f1; }
+
+/* ── Popover tweaks ──────────────────────────────────────────────────────── */
+.popover { max-width:280px; font-size:.82rem; }
+.popover-body { line-height:1.55; color:#374151; padding:.65rem .8rem; }
+
+/* ── Upload zone ─────────────────────────────────────────────────────────── */
+.upload-zone {
+  border:2px dashed #d1d5db; border-radius:9px; padding:1.8rem 1rem;
+  text-align:center; cursor:pointer; transition:all .2s; background:#fafafa;
+}
+.upload-zone:hover,.upload-zone.dragover { border-color:#6366f1; background:#eef2ff; }
+.upload-zone i.up-ico { font-size:2.2rem; color:#9ca3af; display:block; margin-bottom:.4rem; }
+#source-preview {
+  display:block; width:170px; height:140px;
+  object-fit:contain; cursor:zoom-in;
+  border:1px solid #e5e7eb; border-radius:9px;
+  background:#fafafa;
+  transition:transform .22s ease, box-shadow .22s ease;
+  transform-origin:top left;
+  position:relative; z-index:1;
+}
+#source-preview:hover {
+  transform:scale(4.4);
+  box-shadow:0 16px 52px rgba(0,0,0,.32);
+  z-index:1000;
+}
+
+/* ── Preset grid ─────────────────────────────────────────────────────────── */
+.preset-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(165px,1fr)); gap:.6rem; }
+.preset-card {
+  border:2px solid #e5e7eb; border-radius:9px; padding:.8rem;
+  cursor:pointer; transition:border-color .13s,background .13s; background:#fff; user-select:none;
+}
+.preset-card:hover  { border-color:#a5b4fc; background:#f5f3ff; }
+.preset-card.active { border-color:#6366f1; background:#eef2ff; }
+.preset-card .pc-icon { font-size:1.3rem; color:#6366f1; display:block; margin-bottom:.3rem; }
+.preset-card .pc-name { font-weight:700; font-size:.84rem; color:#1f2937; display:block; margin-bottom:.2rem; }
+.preset-card .pc-desc { font-size:.76rem; color:#6b7280; line-height:1.35; margin-bottom:.2rem; }
+.preset-card .pc-ex   { font-size:.72rem; color:#9ca3af; font-style:italic; }
+.preset-card .pc-badge { font-size:.68rem; background:#fef3c7; color:#92400e; border:1px solid #fcd34d; border-radius:4px; padding:1px 5px; margin-top:.35rem; display:inline-block; font-weight:600; }
+
+/* ── Color input pair ────────────────────────────────────────────────────── */
+.color-row { display:flex; gap:.5rem; align-items:center; }
+.color-row input[type=color] { width:38px; height:35px; padding:2px 3px; border-radius:6px; flex-shrink:0; cursor:pointer; border:1px solid #d1d5db; background:#fff; }
+
+/* ── Dir picker ──────────────────────────────────────────────────────────── */
+.dir-row { display:flex; }
+.dir-row .form-control { border-radius:6px 0 0 6px; border-right:0; }
+.dir-row .btn { border-radius:0 6px 6px 0; white-space:nowrap; flex-shrink:0; }
+
+/* ── SVG preview ─────────────────────────────────────────────────────────── */
+.preview-outer {
+  display:inline-block;
+  overflow:visible; /* MUST stay visible — lets zoomed thumb float above siblings */
+  vertical-align:top;
+}
+.preview-thumb {
+  display:block; width:170px; height:140px;
+  object-fit:contain; cursor:zoom-in;
+  border:1px solid #d1d5db; border-radius:9px;
+  background:repeating-conic-gradient(#ddd 0% 25%,#fff 0% 50%) 0 0/12px 12px;
+  transition:transform .22s ease, box-shadow .22s ease;
+  transform-origin:top left;
+  position:relative; z-index:1;
+}
+.preview-thumb:hover {
+  transform:scale(4.4);
+  box-shadow:0 16px 52px rgba(0,0,0,.32);
+  z-index:1000;
+}
+.preview-hint { font-size:.73rem; color:#9ca3af; margin-top:.3rem; text-align:center; width:170px; }
+
+/* ── Result rows ─────────────────────────────────────────────────────────── */
+.result-file {
+  background:#f9fafb; border:1px solid #e5e7eb; border-radius:7px;
+  padding:.55rem .9rem; display:flex; align-items:center;
+  justify-content:space-between; gap:.8rem; margin-bottom:.4rem;
+}
+.result-file code { font-size:.79rem; color:#374151; word-break:break-all; }
+.save-ok { background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:.7rem 1rem; font-size:.87rem; color:#065f46; margin-top:.75rem; }
+.save-ok code { color:#047857; font-size:.8rem; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.site-footer { border-top:1px solid #e5e7eb; margin-top:2.5rem; padding:1.4rem 0; text-align:center; color:#9ca3af; font-size:.8rem; }
+.site-footer strong { color:#6b7280; font-weight:600; }
+</style>
+</head>
+<body>
+
+<!-- ── Page header ──────────────────────────────────────────────────────────── -->
+<div class="page-header">
+  <div class="container" style="max-width:880px">
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h1><i class="bi bi-bezier2 me-2"></i>Raster → Wektor</h1>
+        <p>Konwertuj obrazy PNG / JPG do formatu SVG i EPS &nbsp;·&nbsp; zoptymalizowane pod ploter i druk</p>
+      </div>
+      <button type="button" id="quit-btn" class="btn btn-sm btn-outline-light mt-1 ms-3 flex-shrink-0"
+              style="opacity:.8" title="Zakończ działanie aplikacji i wyczyść pliki tymczasowe">
+        <i class="bi bi-power me-1"></i>Zakończ
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="container pb-2" style="max-width:880px">
+<form id="main-form" enctype="multipart/form-data" novalidate>
+
+  <!-- ── Upload ─────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-image s-icon"></i>Obraz wejściowy</div>
+    <div class="card-body">
+      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('img-input').click()">
+        <i class="bi bi-cloud-upload up-ico"></i>
+        <strong>Kliknij lub przeciągnij plik tutaj</strong>
+        <div class="text-muted small mt-1">PNG, JPG, BMP, TIFF, WEBP — maks. 100 MB</div>
+      </div>
+      <input type="file" id="img-input" name="image" accept="image/*" class="d-none" required>
+      <div id="source-wrap" class="mt-3 text-center d-none">
+        <div class="preview-outer d-inline-block">
+          <img id="source-preview" src="" alt="Podgląd">
+        </div>
+        <div class="preview-hint mt-1">Najedź = powiększ<br>kliknij = pełny ekran</div>
+        <div id="source-name" class="text-muted small mt-1"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Presets ────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header">
+      <i class="bi bi-sliders s-icon"></i>Szablony ustawień
+      <span class="help-btn" data-bs-toggle="popover" data-help-key="presets">?</span>
+    </div>
+    <div class="card-body">
+      <div class="preset-grid" id="preset-grid">
+        {% for key, info in preset_info.items() %}
+        <div class="preset-card" data-preset="{{ key }}" onclick="applyPreset('{{ key }}', this)">
+          <i class="bi {{ info.icon }} pc-icon"></i>
+          <span class="pc-name">{{ info.label }}</span>
+          <p class="pc-desc mb-0">{{ info.desc }}</p>
+          <span class="pc-ex">{{ info.example }}</span>
+          {% if info.badge is defined %}<span class="pc-badge">{{ info.badge }}</span>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Kanał ──────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-palette2 s-icon"></i>Wejście i kanał koloru</div>
+    <div class="card-body row g-3">
+      <div class="col-md-7">
+        <label class="form-label">Kanał koloru
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="channel">?</span>
+        </label>
+        <select class="form-select" name="channel" id="f-channel">
+          <option value="luma">luma — standardowa luminancja</option>
+          <option value="red">red — kanał czerwony</option>
+          <option value="green">green — kanał zielony</option>
+          <option value="blue">blue — kanał niebieski</option>
+          <option value="max">max — jasne elementy na kolorowym tle</option>
+          <option value="min">min — ciemne elementy na kolorowym tle</option>
+        </select>
+      </div>
+      <div class="col-md-5 d-flex align-items-end pb-1">
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="invert" id="f-invert" value="true">
+          <label class="form-check-label" for="f-invert">Odwróć (ciemne na jasnym tle)
+            <span class="help-btn" data-bs-toggle="popover" data-help-key="invert">?</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Progowanie ─────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-toggles s-icon"></i>Progowanie</div>
+    <div class="card-body row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Tryb progowania
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="threshold_mode">?</span>
+        </label>
+        <select class="form-select" name="threshold_mode" id="f-threshold_mode">
+          <option value="otsu">otsu — automatyczny (zalecany)</option>
+          <option value="manual">manual — ręczny</option>
+          <option value="adaptive_mean">adaptive_mean — adaptacyjny, średnia</option>
+          <option value="adaptive_gaussian">adaptive_gaussian — adaptacyjny, Gaussa</option>
+        </select>
+      </div>
+      <div class="col-md-6" id="row-threshold_value">
+        <label class="form-label">Wartość progu (0–255)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="threshold_value">?</span>
+        </label>
+        <input type="number" class="form-control" name="threshold_value" id="f-threshold_value" value="{{ default.threshold_value }}" min="0" max="255">
+      </div>
+      <div class="col-md-6 d-none" id="row-adaptive_block_size">
+        <label class="form-label">Rozmiar bloku adaptacyjnego
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="adaptive_block_size">?</span>
+        </label>
+        <input type="number" class="form-control" name="adaptive_block_size" id="f-adaptive_block_size" value="{{ default.adaptive_block_size }}" min="3" step="2">
+      </div>
+      <div class="col-md-6 d-none" id="row-adaptive_C">
+        <label class="form-label">Stała C
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="adaptive_C">?</span>
+        </label>
+        <input type="number" class="form-control" name="adaptive_C" id="f-adaptive_C" value="{{ default.adaptive_C }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Wstępne przetwarzanie ──────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-layers s-icon"></i>Wstępne przetwarzanie</div>
+    <div class="card-body row g-3">
+      <div class="col-md-4">
+        <label class="form-label">Skalowanie w górę (×)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="upscale">?</span>
+        </label>
+        <input type="number" class="form-control" name="upscale" id="f-upscale" value="{{ default.upscale }}" min="1" max="4">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Metoda skalowania
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="upscale_method">?</span>
+        </label>
+        <select class="form-select" name="upscale_method" id="f-upscale_method">
+          <option value="nearest">nearest — najbliższy sąsiad</option>
+          <option value="linear">linear — liniowa</option>
+          <option value="cubic">cubic — sześcienna (zalecana)</option>
+          <option value="lanczos">lanczos — Lanczos</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Rozmycie wstępne σ
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="pre_blur_sigma">?</span>
+        </label>
+        <input type="number" class="form-control" name="pre_blur_sigma" id="f-pre_blur_sigma" value="{{ default.pre_blur_sigma }}" min="0" step="0.1">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Morfologia ─────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-eraser s-icon"></i>Operacje morfologiczne</div>
+    <div class="card-body row g-3">
+      <div class="col-6 col-md-3">
+        <label class="form-label">Otwarcie (jądro px)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="morph_open">?</span>
+        </label>
+        <input type="number" class="form-control" name="morph_open" id="f-morph_open" value="{{ default.morph_open }}" min="0" step="1">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label">Zamknięcie (jądro px)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="morph_close">?</span>
+        </label>
+        <input type="number" class="form-control" name="morph_close" id="f-morph_close" value="{{ default.morph_close }}" min="0" step="1">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label">Dylatacja (iteracje)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="dilate">?</span>
+        </label>
+        <input type="number" class="form-control" name="dilate" id="f-dilate" value="{{ default.dilate }}" min="0" step="1">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label">Erozja (iteracje)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="erode">?</span>
+        </label>
+        <input type="number" class="form-control" name="erode" id="f-erode" value="{{ default.erode }}" min="0" step="1">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Kontury ────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-vector-pen s-icon"></i>Selekcja konturów</div>
+    <div class="card-body row g-3 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label">Minimalna powierzchnia (px²)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="min_area">?</span>
+        </label>
+        <input type="number" class="form-control" name="min_area" id="f-min_area" value="{{ default.min_area }}" min="0" step="0.5">
+      </div>
+      <div class="col-md-6 pb-1">
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="include_holes" id="f-include_holes" value="true" checked>
+          <label class="form-check-label" for="f-include_holes">Uwzględnij otwory wewnętrzne
+            <span class="help-btn" data-bs-toggle="popover" data-help-key="include_holes">?</span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Wygładzanie ────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-bezier s-icon"></i>Wygładzanie konturów</div>
+    <div class="card-body row g-3">
+      <div class="col-md-6">
+        <label class="form-label">Wygładzanie σ
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="contour_sigma">?</span>
+        </label>
+        <input type="number" class="form-control" name="contour_sigma" id="f-contour_sigma" value="{{ default.contour_sigma }}" min="0" step="0.1">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Odstęp próbkowania (px)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="resample_spacing">?</span>
+        </label>
+        <input type="number" class="form-control" name="resample_spacing" id="f-resample_spacing" value="{{ default.resample_spacing }}" min="0.5" step="0.5">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Krzywe ─────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-pen s-icon"></i>Dopasowanie krzywych</div>
+    <div class="card-body row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Tryb wyjścia
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="output_mode">?</span>
+        </label>
+        <select class="form-select" name="output_mode" id="f-output_mode">
+          <option value="bezier">bezier — krzywe Béziera (zalecane)</option>
+          <option value="polygon">polygon — wielokąty / łamane</option>
+        </select>
+      </div>
+      <div class="col-md-4 pb-1">
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="detect_corners" id="f-detect_corners" value="true">
+          <label class="form-check-label" for="f-detect_corners">Wykrywaj narożniki
+            <span class="help-btn" data-bs-toggle="popover" data-help-key="detect_corners">?</span>
+          </label>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Kąt narożnika (°)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="corner_angle_deg">?</span>
+        </label>
+        <input type="number" class="form-control" name="corner_angle_deg" id="f-corner_angle_deg" value="{{ default.corner_angle_deg }}" min="1" max="179" step="1">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Kolory ─────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-droplet-half s-icon"></i>Kolory</div>
+    <div class="card-body row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Kolor wzoru (foreground)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="foreground">?</span>
+        </label>
+        <div class="color-row">
+          <input type="color" id="fg-picker" value="#ffffff">
+          <input type="text" class="form-control" name="foreground" id="f-foreground" value="{{ default.foreground }}" placeholder="#rrggbb">
+        </div>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Kolor tła (background)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="background">?</span>
+        </label>
+        <div class="color-row">
+          <input type="color" id="bg-picker" value="#000000">
+          <input type="text" class="form-control" name="background" id="f-background" value="{{ default.background or '#000000' }}" placeholder="none lub #rrggbb">
+        </div>
+      </div>
+      <div class="col-md-4">
+        <button type="button" class="btn btn-outline-secondary w-100" id="btn-transparent">
+          <i class="bi bi-circle-half me-1"></i>Przezroczyste tło
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Format ─────────────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header"><i class="bi bi-file-earmark-code s-icon"></i>Format pliku wyjściowego</div>
+    <div class="card-body row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Formaty
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="formats">?</span>
+        </label>
+        <div class="d-flex gap-3 pt-1">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="formats" id="fmt-svg" value="svg" checked>
+            <label class="form-check-label fw-semibold" for="fmt-svg">SVG</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="formats" id="fmt-eps" value="eps" checked>
+            <label class="form-check-label fw-semibold" for="fmt-eps">EPS</label>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Precyzja współrzędnych
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="coord_precision">?</span>
+        </label>
+        <input type="number" class="form-control" name="coord_precision" id="f-coord_precision" value="{{ default.coord_precision }}" min="0" max="6">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Nazwa pliku (opcjonalnie)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="output_name">?</span>
+        </label>
+        <input type="text" class="form-control" name="output_name" id="f-output_name" placeholder="np. moje_logo">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Konwertuj ──────────────────────────────────────────────────────────── -->
+  <div class="d-flex align-items-center gap-3 my-4">
+    <button type="submit" class="btn btn-primary btn-lg px-5" id="convert-btn">
+      <span class="spinner-border spinner-border-sm d-none me-2" id="btn-spinner"></span>
+      <i class="bi bi-play-fill me-1" id="btn-icon"></i>Konwertuj
+    </button>
+    <span class="text-muted small" id="status-text"></span>
+  </div>
+</form>
+
+<!-- ── Error ───────────────────────────────────────────────────────────────── -->
+<div class="alert alert-danger d-none mb-3" id="error-alert">
+  <i class="bi bi-exclamation-triangle-fill me-2"></i><span id="error-msg"></span>
+</div>
+
+<!-- ── Podgląd i zapis ────────────────────────────────────────────────────── -->
+<div class="card d-none" id="preview-section">
+  <div class="card-header"><i class="bi bi-eye s-icon"></i>Podgląd wyniku i zapis</div>
+  <div class="card-body">
+    <div class="row g-4">
+      <div class="col-auto">
+        <div class="preview-outer">
+          <img id="preview-thumb" class="preview-thumb" src="" alt="Podgląd SVG">
+        </div>
+        <div class="preview-hint">Najedź = powiększ<br>kliknij = pełny ekran</div>
+        <div id="no-svg-note" class="text-muted small mt-2 text-center d-none">
+          <i class="bi bi-info-circle me-1"></i>Podgląd niedostępny (tylko EPS)
+        </div>
+      </div>
+      <div class="col">
+        <p class="fw-semibold mb-2 text-muted small text-uppercase" style="letter-spacing:.04em">Wygenerowane pliki</p>
+        <div id="result-files" class="mb-3"></div>
+        <p class="fw-semibold mb-2 text-muted small text-uppercase" style="letter-spacing:.04em">Zapisz do folderu</p>
+        <div class="dir-row mb-3">
+          <input type="text" class="form-control" id="save-dir" placeholder="Ścieżka do folderu...">
+          <button type="button" class="btn btn-outline-secondary" id="pick-save-dir">
+            <i class="bi bi-folder2-open me-1"></i>Wybierz
+          </button>
+        </div>
+        <button type="button" class="btn btn-success px-4" id="save-btn">
+          <span class="spinner-border spinner-border-sm d-none me-1" id="save-spinner"></span>
+          <i class="bi bi-floppy me-1"></i>Zapisz pliki
+        </button>
+        <div id="save-result"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Full-size SVG modal ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="svg-modal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2 border-bottom">
+        <h6 class="modal-title mb-0 fw-semibold" id="modal-title">Podgląd — pełny rozmiar</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3 text-center"
+           style="background:repeating-conic-gradient(#ddd 0% 25%,#fff 0% 50%) 0 0/14px 14px; min-height:320px; display:flex; align-items:center; justify-content:center;">
+        <img id="modal-img" src="" style="max-width:100%; max-height:78vh; object-fit:contain;">
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<!-- ── Footer ─────────────────────────────────────────────────────────────── -->
+<footer class="site-footer">
+  Created by <strong>Paweł Jonczyk</strong>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const DESKTOP = {{ desktop | tojson }};
+let currentSession = null;
+let svgDataUrl     = null;
+let sourceDataUrl  = null;
+
+// ── Help content (HTML, shown in popovers) ────────────────────────────────────
+const HELP = {
+  presets:
+    `Gotowe zestawy parametrów pod konkretny typ grafiki.<br>
+     Kliknij kartę aby zastosować.<br>
+     Możesz potem zmienić dowolny parametr.`,
+
+  channel:
+    `Jak obraz kolorowy jest konwertowany do skali szarości:<br>
+     <b>luma</b> — standardowa luminancja <em>(zalecane)</em><br>
+     <b>red / green / blue</b> — izoluje wybrany kanał<br>
+     <b>max</b> — wydobywa jasne elementy na kolorowym tle<br>
+     <b>min</b> — wydobywa ciemne elementy na kolorowym tle`,
+
+  invert:
+    `Zamienia role tła i pierwszego planu.<br>
+     Zaznacz gdy wzór jest <b>ciemny na jasnym tle</b>,<br>
+     np. czarne logo na białym tle lub skan szkicu ołówkowego.`,
+
+  threshold_mode:
+    `Jak obraz staje się czarno-białą maską:<br>
+     <b>otsu</b> — automatyczny dobór progu <em>(zalecane)</em><br>
+     <b>manual</b> — ręczna wartość progu poniżej<br>
+     <b>adaptive_mean</b> — lokalny próg, średnia<br>
+     <b>adaptive_gaussian</b> — lokalny próg, Gaussa<br>
+     <em>Tryby adaptive dobre przy nierównym oświetleniu.</em>`,
+
+  threshold_value:
+    `Używane tylko w trybie <b>manual</b>.<br>
+     Piksele jaśniejsze od wartości → tło.<br>
+     Piksele ciemniejsze → pierwszy plan.<br>
+     Zakres: <b>0</b> (czerń) – <b>255</b> (biel)`,
+
+  adaptive_block_size:
+    `Rozmiar okna do obliczania lokalnego progu.<br>
+     Musi być <b>liczbą nieparzystą ≥ 3</b>.<br>
+     <b>Mniejsza</b> wartość = szybsze zmiany progu.<br>
+     <b>Większa</b> wartość = wolniejsze, bardziej globalne.`,
+
+  adaptive_C:
+    `Wartość odejmowana od lokalnej średniej przy progowaniu adaptacyjnym.<br>
+     <b>Wyższa</b> = mniejszy obszar pierwszego planu<br>
+     (zmniejsza wrażliwość na szum i gradient).`,
+
+  upscale:
+    `Powiększa obraz przed śledzeniem konturów:<br>
+     <b>1</b> = brak skalowania<br>
+     <b>2</b> = dobra jakość <em>(zalecane)</em><br>
+     <b>4</b> = maksimum — wolniejsze, duże użycie pamięci`,
+
+  upscale_method:
+    `Algorytm interpolacji przy skalowaniu:<br>
+     <b>cubic</b> — dobry kompromis jakości i szybkości <em>(zalecane)</em><br>
+     <b>lanczos</b> — najwyższa jakość, wolniejszy<br>
+     <b>linear</b> — szybki, wystarczający<br>
+     <b>nearest</b> — najszybszy, pikselizuje krawędzie`,
+
+  pre_blur_sigma:
+    `Gaussowskie rozmycie przed progowaniem.<br>
+     Redukuje szum i artefakty kompresji JPEG.<br>
+     <b>0</b> = wyłączone<br>
+     <b>0.5 – 1.5</b> = delikatne usuwanie szumu<br>
+     <b>&gt; 2</b> = silne rozmycie, traci się krawędzie`,
+
+  morph_open:
+    `Erozja → dylatacja. Usuwa drobny szum i cienkie wypustki.<br>
+     <b>Krok:</b> 1 px (wartości całkowite)<br>
+     <b>0</b> = wyłączone<br>
+     <b>1–2</b> = delikatne czyszczenie krawędzi<br>
+     <b>3–5</b> = usuwanie większych plamek szumu<br>
+     <b>&gt; 5</b> = agresywne — może zniekształcić kształt<br>
+     <em>Uwaga: wartość jest rozmiarem jądra elipsy (px).</em>`,
+
+  morph_close:
+    `Dylatacja → erozja. Wypełnia dziury i przerwy w konturach.<br>
+     <b>Krok:</b> 1 px (wartości całkowite)<br>
+     <b>0</b> = wyłączone<br>
+     <b>1–2</b> = wypełnianie mikro-przerw<br>
+     <b>3–6</b> = łączenie pobliskich elementów<br>
+     <em>Uwaga: wartość jest rozmiarem jądra elipsy (px).</em>`,
+
+  dilate:
+    `Pogrubia kontur — każda iteracja rozszerza go o <b>1 px</b>.<br>
+     <b>Krok:</b> 1 iteracja<br>
+     <b>0</b> = wyłączone<br>
+     <b>1–2</b> = subtelne pogrubienie linii<br>
+     <b>3–5</b> = wyraźne powiększenie kształtu<br>
+     Używaj gdy elementy wychodzą zbyt cienkie po progowaniu.`,
+
+  erode:
+    `Ścienia kontur — każda iteracja zmniejsza go o <b>1 px</b>.<br>
+     <b>Krok:</b> 1 iteracja<br>
+     <b>0</b> = wyłączone<br>
+     <b>1–2</b> = subtelne odchudzenie linii<br>
+     <b>3–5</b> = znaczące zmniejszenie kształtu<br>
+     Pomaga gdy elementy są za grube lub sklejają się ze sobą.`,
+
+  min_area:
+    `Kontury mniejsze od tej wartości (w px² oryginału)<br>
+     są odfiltrowane i nie trafiają do pliku wyjściowego.<br>
+     Świetnie eliminuje drobny szum i artefakty JPEG.`,
+
+  include_holes:
+    `Wycina wnętrza liter i kształtów (np. środek litery 'O').<br>
+     <b>Zaznaczone</b> — reguła even-odd; ważne dla liter<br>
+     i naklejek wycinanych na ploterze.<br>
+     <b>Odznaczone</b> — bryłowe sylwetki bez wycinanych dziur.`,
+
+  contour_sigma:
+    `Gaussowskie wygładzanie punktów konturu (filtr periodyczny).<br>
+     <b>Wyższe</b> = gładsze krzywe, mniej szczegółów.<br>
+     <b>Niższe</b> = więcej drobnych detali i nierówności.<br>
+     <b>Dla plotera:</b> 1.5 – 2.5 eliminuje micro-nierówności<br>
+     które byłyby słabo wycięte przez głowicę.`,
+
+  resample_spacing:
+    `Odległość łukowa między kolejnymi punktami konturu.<br>
+     <b>Mniejsza</b> = więcej szczegółów, większy plik.<br>
+     <b>Większa</b> = prostszy kształt, mniejszy plik.<br>
+     <b>Dla plotera:</b> 3 – 5 px zapobiega micro-ruchom głowicy.`,
+
+  output_mode:
+    `<b>bezier</b> — gładkie krzywe Béziera.<br>
+     Równomierne cięcie na ploterze. <em>(zalecane)</em><br>
+     <b>polygon</b> — łamane z odcinków prostych.<br>
+     Zachowuje każdy zakręt bez zaokrąglania.`,
+
+  detect_corners:
+    `Gdy zaznaczone, ostre zmiany kierunku konturu<br>
+     nie są zaokrąglane krzywymi Béziera.<br>
+     <b>Przydatne</b> dla logotypów z prostymi, ostrymi kątami.`,
+
+  corner_angle_deg:
+    `Próg kąta (w stopniach) powyżej którego<br>
+     punkt uznawany jest za ostry narożnik i nie jest wygładzany.<br>
+     Aktywne tylko gdy <b>Wykrywaj narożniki</b> jest włączone.<br>
+     <b>Niższe</b> = więcej narożników wykrytych.`,
+
+  foreground:
+    `Kolor wypełnienia kształtów wektorowych.<br>
+     <b>Dla plotera:</b> zwykle czarny (#000000).<br>
+     Przy wycinaniu kolor pliku nie wpływa na cięcie,<br>
+     ale ułatwia weryfikację podglądu przed wysłaniem.`,
+
+  background:
+    `Kolor tła dokumentu SVG/EPS.<br>
+     <b>none</b> = przezroczyste <em>(zalecane dla plotera)</em><br>
+     Ploter tnie tylko kontury — tło nie jest drukowane.<br>
+     Podaj kod <b>#rrggbb</b> lub wpisz <b>none</b>.`,
+
+  formats:
+    `<b>SVG</b> — obsługiwany przez Inkscape, Inkcut,<br>
+     CutStudio i większość sterowników ploterek.<br>
+     <b>EPS</b> — dla starszych sterowników ploterek,<br>
+     Adobe Illustratora i CorelDRAW.`,
+
+  coord_precision:
+    `Liczba miejsc po przecinku w zapisywanych współrzędnych.<br>
+     <b>0</b> = liczby całkowite (najmniejszy plik)<br>
+     <b>2</b> = domyślne, dobry kompromis<br>
+     <b>3</b> = wysoka precyzja (duże formaty, druk offsetowy)`,
+
+  output_name:
+    `Nazwa pliku wynikowego bez rozszerzenia.<br>
+     <b>Puste</b> = używana jest nazwa pliku wejściowego,<br>
+     np. dla wejścia <em>logo.png</em> → <em>logo.svg</em>.`,
+};
+
+// ── Popovers (HTML mode) ──────────────────────────────────────────────────────
+document.querySelectorAll('[data-bs-toggle="popover"]').forEach(el => {
+  const key = el.dataset.helpKey;
+  new bootstrap.Popover(el, {
+    trigger: 'hover focus',
+    placement: 'top',
+    container: 'body',
+    html: true,
+    content: HELP[key] || '',
+  });
+});
+
+// ── Upload / source preview ───────────────────────────────────────────────────
+const zone = document.getElementById('upload-zone');
+const imgInput = document.getElementById('img-input');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+zone.addEventListener('drop', e => {
+  e.preventDefault(); zone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) { imgInput.files = e.dataTransfer.files; showSourcePreview(e.dataTransfer.files[0]); }
+});
+imgInput.addEventListener('change', e => { if (e.target.files[0]) showSourcePreview(e.target.files[0]); });
+function showSourcePreview(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    sourceDataUrl = e.target.result;
+    document.getElementById('source-preview').src = sourceDataUrl;
+    document.getElementById('source-name').textContent = file.name + ' — ' + (file.size/1024).toFixed(0) + ' KB';
+    document.getElementById('source-wrap').classList.remove('d-none');
+    zone.style.padding = '.7rem';
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── Threshold mode visibility ─────────────────────────────────────────────────
+document.getElementById('f-threshold_mode').addEventListener('change', function () {
+  const adaptive = this.value.startsWith('adaptive');
+  document.getElementById('row-threshold_value').classList.toggle('d-none', this.value !== 'manual');
+  document.getElementById('row-adaptive_block_size').classList.toggle('d-none', !adaptive);
+  document.getElementById('row-adaptive_C').classList.toggle('d-none', !adaptive);
+});
+document.getElementById('f-threshold_mode').dispatchEvent(new Event('change'));
+
+// ── Color pickers ─────────────────────────────────────────────────────────────
+function wireColor(pid, tid) {
+  const p = document.getElementById(pid), t = document.getElementById(tid);
+  p.addEventListener('input', () => t.value = p.value);
+  t.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(t.value)) p.value = t.value; });
+}
+wireColor('fg-picker','f-foreground');
+wireColor('bg-picker','f-background');
+document.getElementById('btn-transparent').addEventListener('click', () => {
+  document.getElementById('f-background').value = 'none';
+});
+
+// ── Preset cards ──────────────────────────────────────────────────────────────
+// Presets that should always use transparent background regardless of their own bg setting
+const TRANSPARENT_BG_PRESETS = new Set(['ploter', 'dark_on_light']);
+
+function applyPreset(name, card) {
+  document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+  if (card) card.classList.add('active');
+
+  fetch('/preset/' + encodeURIComponent(name))
+    .then(r => r.json())
+    .then(cfg => {
+      for (const [key, val] of Object.entries(cfg)) {
+        if (key === 'formats') continue;
+        const el = document.getElementById('f-' + key);
+        if (!el) continue;
+        if (el.type === 'checkbox') el.checked = val === true;
+        else { el.value = (val === null || val === undefined) ? '' : val; el.dispatchEvent(new Event('change')); }
+      }
+      if (Array.isArray(cfg.formats)) {
+        document.getElementById('fmt-svg').checked = cfg.formats.includes('svg');
+        document.getElementById('fmt-eps').checked = cfg.formats.includes('eps');
+      }
+      // Apply color picker sync for non-null colors
+      const fg = cfg.foreground;
+      if (fg && /^#[0-9a-fA-F]{6}$/.test(fg)) document.getElementById('fg-picker').value = fg;
+
+      // Force transparent background for plotter and dark-on-light presets
+      if (TRANSPARENT_BG_PRESETS.has(name)) {
+        document.getElementById('f-background').value = 'none';
+      } else {
+        const bg = cfg.background;
+        if (bg && /^#[0-9a-fA-F]{6}$/.test(bg)) document.getElementById('bg-picker').value = bg;
+      }
+    });
+}
+
+// ── Form submit ───────────────────────────────────────────────────────────────
+document.getElementById('main-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!imgInput.files.length) { showError('Wybierz plik obrazu przed konwersją.'); return; }
+
+  setConverting(true);
+  elHide('preview-section'); elHide('error-alert');
+  document.getElementById('save-result').innerHTML = '';
+
+  const data = new FormData(e.target);
+  ['invert','include_holes','detect_corners'].forEach(id => {
+    if (!document.getElementById('f-' + id).checked) data.set(id, 'false');
+  });
+
+  try {
+    const res = await fetch('/convert', { method:'POST', body:data });
+    const json = await res.json();
+    if (!res.ok || json.error) showError(json.error || 'Nieznany błąd konwersji.');
+    else onConverted(json);
+  } catch (err) {
+    showError('Błąd połączenia: ' + err.message);
+  } finally {
+    setConverting(false);
+  }
+});
+
+// ── Handle successful conversion ──────────────────────────────────────────────
+function onConverted(json) {
+  currentSession = json.session_id;
+  svgDataUrl = json.svg_b64 ? `data:image/svg+xml;base64,${json.svg_b64}` : null;
+
+  const thumb = document.getElementById('preview-thumb');
+  const noSvg = document.getElementById('no-svg-note');
+
+  if (svgDataUrl) {
+    thumb.src = svgDataUrl;
+    thumb.style.display = 'block';
+    noSvg.classList.add('d-none');
+  } else {
+    thumb.style.display = 'none';
+    noSvg.classList.remove('d-none');
+  }
+
+  const fileDiv = document.getElementById('result-files');
+  fileDiv.innerHTML = '';
+  json.files.forEach(f => {
+    fileDiv.insertAdjacentHTML('beforeend', `
+      <div class="result-file">
+        <span><i class="bi bi-file-earmark-code me-1 text-muted"></i><code>${esc(f.name)}</code></span>
+        <a href="/download?path=${encodeURIComponent(f.path)}"
+           class="btn btn-sm btn-outline-primary flex-shrink-0" download="${esc(f.name)}">
+          <i class="bi bi-download me-1"></i>Pobierz
+        </a>
+      </div>`);
+  });
+
+  if (!document.getElementById('save-dir').value)
+    document.getElementById('save-dir').value = DESKTOP;
+
+  elShow('preview-section');
+  document.getElementById('preview-section').scrollIntoView({ behavior:'smooth' });
+}
+
+// ── Folder picker ─────────────────────────────────────────────────────────────
+document.getElementById('pick-save-dir').addEventListener('click', async () => {
+  try {
+    const res = await fetch('/pick-dir');
+    const d   = await res.json();
+    if (d.path) document.getElementById('save-dir').value = d.path;
+  } catch (e) { showError('Nie można otworzyć dialogu: ' + e.message); }
+});
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+document.getElementById('save-btn').addEventListener('click', async () => {
+  const dest = document.getElementById('save-dir').value.trim();
+  if (!dest)           { showError('Wybierz lub wpisz folder docelowy.'); return; }
+  if (!currentSession) { showError('Najpierw wykonaj konwersję.'); return; }
+
+  const btn = document.getElementById('save-btn');
+  const sp  = document.getElementById('save-spinner');
+  btn.disabled = true; sp.classList.remove('d-none');
+  document.getElementById('save-result').innerHTML = '';
+
+  try {
+    const res = await fetch('/save', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ session_id:currentSession, dest }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) {
+      document.getElementById('save-result').innerHTML =
+        `<div class="alert alert-danger mt-3 mb-0 py-2"><i class="bi bi-exclamation-triangle me-1"></i>${esc(d.error)}</div>`;
+    } else {
+      let html = '<div class="save-ok mt-3"><i class="bi bi-check-circle-fill me-2"></i><strong>Zapisano:</strong><ul class="mb-0 mt-1 ps-3">';
+      d.saved.forEach(f => { html += `<li><code>${esc(f.path)}</code></li>`; });
+      html += '</ul></div>';
+      document.getElementById('save-result').innerHTML = html;
+    }
+  } catch (err) {
+    document.getElementById('save-result').innerHTML =
+      `<div class="alert alert-danger mt-3 mb-0 py-2">Błąd: ${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false; sp.classList.add('d-none');
+  }
+});
+
+// ── Full-size modal ───────────────────────────────────────────────────────────
+function openModal(url, title) {
+  document.getElementById('modal-img').src = url;
+  document.getElementById('modal-title').textContent = title;
+  new bootstrap.Modal(document.getElementById('svg-modal')).show();
+}
+document.getElementById('preview-thumb').addEventListener('click', () => {
+  if (svgDataUrl) openModal(svgDataUrl, 'Podgląd SVG — pełny rozmiar');
+});
+document.getElementById('source-preview').addEventListener('click', () => {
+  if (sourceDataUrl) openModal(sourceDataUrl, 'Podgląd obrazu wejściowego');
+});
+
+// ── Scroll-aware preview zoom origin ─────────────────────────────────────────
+// On hover, compute where the zoomed image will best fit inside the viewport
+// and set transform-origin accordingly so it never clips off an edge.
+function attachZoomOrigin(el) {
+  const SCALE = 4.4;
+  el.addEventListener('mouseenter', () => {
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth  || document.documentElement.clientWidth;
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+
+    // Compute the transform-origin point (in element px) that keeps the
+    // scaled image fully inside the viewport, preferring center-of-element.
+    // When scaling by S from origin ox:
+    //   scaled_left  = rect.left - ox*(S-1)  >= 0
+    //   scaled_right = rect.left - ox*(S-1) + rect.width*S <= vw
+    function clampOrigin(rPos, rSize, viewSize) {
+      const oxMin = (rPos + rSize * SCALE - viewSize) / (SCALE - 1);
+      const oxMax = rPos / (SCALE - 1);
+      const ideal = rSize / 2;
+      return Math.min(rSize, Math.max(0, Math.min(oxMax, Math.max(oxMin, ideal))));
+    }
+
+    const ox = clampOrigin(rect.left, rect.width,  vw);
+    const oy = clampOrigin(rect.top,  rect.height, vh);
+    el.style.transformOrigin = `${ox}px ${oy}px`;
+  });
+  el.addEventListener('mouseleave', () => { el.style.transformOrigin = ''; });
+}
+attachZoomOrigin(document.getElementById('preview-thumb'));
+attachZoomOrigin(document.getElementById('source-preview'));
+
+// ── Quit ──────────────────────────────────────────────────────────────────────
+document.getElementById('quit-btn').addEventListener('click', async () => {
+  if (!confirm('Zakończyć aplikację?\n\nPliki tymczasowe zostaną usunięte. Zapisane wyniki pozostają niezmienione.')) return;
+  document.getElementById('quit-btn').disabled = true;
+  try { await fetch('/quit', { method:'POST' }); } catch (_) {}
+  document.body.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                height:100vh;font-family:system-ui,sans-serif;color:#374151;background:#f0f2f5;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5"
+           stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:1.2rem">
+        <path d="M18.364 5.636a9 9 0 1 1-12.728 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+      </svg>
+      <h2 style="font-size:1.4rem;font-weight:700;margin-bottom:.5rem">Aplikacja zakończona</h2>
+      <p style="color:#6b7280;margin:0">Możesz zamknąć tę kartę przeglądarki.</p>
+    </div>`;
+});
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function setConverting(on) {
+  document.getElementById('convert-btn').disabled = on;
+  document.getElementById('btn-spinner').classList.toggle('d-none', !on);
+  document.getElementById('btn-icon').classList.toggle('d-none', on);
+  document.getElementById('status-text').textContent = on ? 'Przetwarzanie…' : '';
+}
+function showError(msg) {
+  document.getElementById('error-msg').textContent = msg;
+  elShow('error-alert');
+  document.getElementById('error-alert').scrollIntoView({ behavior:'smooth' });
+}
+function elShow(id) {
+  const el = document.getElementById(id);
+  el.classList.remove('d-none');
+  el.style.display = 'block';
+}
+function elHide(id) {
+  const el = document.getElementById(id);
+  el.classList.add('d-none');
+  el.style.removeProperty('display');
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

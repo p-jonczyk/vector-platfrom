@@ -1,0 +1,15 @@
+{
+  "_comment": "Example config — fields may be omitted; defaults will fill in.",
+  "channel": "luma",
+  "threshold_mode": "otsu",
+  "upscale": 2,
+  "pre_blur_sigma": 1.2,
+  "contour_sigma": 2.0,
+  "resample_spacing": 4.0,
+  "output_mode": "bezier",
+  "detect_corners": false,
+  "foreground": "#ffffff",
+  "background": "#000000",
+  "coord_precision": 2,
+  "formats": ["svg", "eps"]
+}
