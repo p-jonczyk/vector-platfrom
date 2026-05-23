@@ -174,6 +174,19 @@ vector-platfrom/
 
 ---
 
+## Quick start
+
+This project can be started manually or by using the included `run.bat` file on Windows.
+
+The `run.bat` script is a simple launcher that automatically updates the project with `git pull`, creates the Python virtual environment if it does not exist, installs or updates dependencies from `requirements.txt`, and starts the local web application with `python app.py`.
+
+After it starts, open:
+
+```text
+http://localhost:5000
+```
+
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
