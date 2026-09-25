@@ -431,7 +431,7 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
         <label class="form-label">Formaty
           <span class="help-btn" data-bs-toggle="popover" data-help-key="formats">?</span>
         </label>
-        <div class="d-flex gap-3 pt-1">
+        <div class="d-flex flex-wrap gap-3 pt-1">
           <div class="form-check">
             <input class="form-check-input" type="checkbox" name="formats" id="fmt-svg" value="svg" checked>
             <label class="form-check-label fw-semibold" for="fmt-svg">SVG</label>
@@ -439,6 +439,14 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
           <div class="form-check">
             <input class="form-check-input" type="checkbox" name="formats" id="fmt-eps" value="eps" checked>
             <label class="form-check-label fw-semibold" for="fmt-eps">EPS</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="formats" id="fmt-pdf" value="pdf">
+            <label class="form-check-label fw-semibold" for="fmt-pdf">PDF</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="formats" id="fmt-plt" value="plt">
+            <label class="form-check-label fw-semibold" for="fmt-plt">PLT</label>
           </div>
         </div>
       </div>
@@ -453,6 +461,13 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
           <span class="help-btn" data-bs-toggle="popover" data-help-key="output_name">?</span>
         </label>
         <input type="text" class="form-control" name="output_name" id="f-output_name" placeholder="np. moje_logo">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Rozdzielczość (DPI)
+          <span class="help-btn" data-bs-toggle="popover" data-help-key="dpi">?</span>
+        </label>
+        <input type="number" class="form-control" name="dpi" id="f-dpi" value="{{ default.dpi }}" min="1" step="1">
+        <div class="form-text" id="dpi-size"></div>
       </div>
     </div>
   </div>
@@ -483,7 +498,7 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
         </div>
         <div class="preview-hint">Najedź = powiększ<br>kliknij = pełny ekran</div>
         <div id="no-svg-note" class="text-muted small mt-2 text-center d-none">
-          <i class="bi bi-info-circle me-1"></i>Podgląd niedostępny (tylko EPS)
+          <i class="bi bi-info-circle me-1"></i>Podgląd dostępny tylko przy zaznaczonym SVG
         </div>
       </div>
       <div class="col">
@@ -690,13 +705,40 @@ const HELP = {
     `<b>SVG</b> — obsługiwany przez Inkscape, Inkcut,<br>
      CutStudio i większość sterowników ploterek.<br>
      <b>EPS</b> — dla starszych sterowników ploterek,<br>
-     Adobe Illustratora i CorelDRAW.`,
+     Adobe Illustratora i CorelDRAW.<br>
+     <b>PDF</b> — dobrze obsługiwany przez<br>
+     SignMaster V5 i każdą przeglądarkę PDF.<br>
+     Strona ma rzeczywisty rozmiar wg DPI.<br>
+     <b>PLT</b> (HPGL) — natywny język ploterów<br>
+     tnących. Tylko ścieżki cięcia —<br>
+     bez wypełnienia i bez tła.<br>
+     Krzywe zapisane jako krótkie odcinki<br>
+     (dokładność 0,05 mm). Otwory są<br>
+     wycinane przed konturem zewnętrznym.<br>
+     <em>Można zaznaczyć kilka formatów naraz.</em>`,
 
   coord_precision:
     `Liczba miejsc po przecinku w zapisywanych współrzędnych.<br>
      <b>0</b> = liczby całkowite (najmniejszy plik)<br>
      <b>2</b> = domyślne, dobry kompromis<br>
      <b>3</b> = wysoka precyzja (duże formaty, druk offsetowy)`,
+
+  dpi:
+    `Rozdzielczość obrazu źródłowego —<br>
+     liczba pikseli na cal (2,54 cm).<br>
+     Ustala <b>rzeczywisty rozmiar</b> wyniku<br>
+     we wszystkich formatach.<br>
+     <b>Wzór:</b> rozmiar [mm] = piksele ÷ DPI × 25,4<br>
+     <b>Przykład</b> — obraz o szerokości 1200 px:<br>
+     <b>300</b> DPI → 101,6 mm <em>(typowy skan)</em><br>
+     <b>96</b> DPI → 317,5 mm <em>(domyślne)</em><br>
+     <b>72</b> DPI → 423,3 mm<br>
+     <b>Potrzebna konkretna szerokość?</b><br>
+     DPI = piksele ÷ szerokość [mm] × 25,4<br>
+     np. 1200 px na 100 mm → <b>304,8</b> DPI<br>
+     <em>Nie zmienia kształtu ani jakości,<br>
+     tylko skalę. Za szczegółowość odpowiada<br>
+     „Skalowanie w górę”.</em>`,
 
   output_name:
     `Nazwa pliku wynikowego bez rozszerzenia.<br>
@@ -738,6 +780,20 @@ function showSourcePreview(file) {
   reader.readAsDataURL(file);
 }
 
+// ── DPI → physical output size ────────────────────────────────────────────────
+const srcImg = document.getElementById('source-preview');
+function updateDpiSize() {
+  const out = document.getElementById('dpi-size');
+  const dpi = parseFloat(document.getElementById('f-dpi').value);
+  if (!(dpi > 0))           { out.textContent = 'Podaj DPI większe od 0.'; return; }
+  if (!srcImg.naturalWidth) { out.textContent = 'Wczytaj obraz, aby zobaczyć rozmiar wyniku.'; return; }
+  const mm = px => (px / dpi * 25.4).toLocaleString('pl-PL', { maximumFractionDigits: 1 });
+  out.textContent = `Rozmiar wyniku: ${mm(srcImg.naturalWidth)} × ${mm(srcImg.naturalHeight)} mm`;
+}
+srcImg.addEventListener('load', updateDpiSize);
+document.getElementById('f-dpi').addEventListener('input', updateDpiSize);
+updateDpiSize();
+
 // ── Threshold mode visibility ─────────────────────────────────────────────────
 document.getElementById('f-threshold_mode').addEventListener('change', function () {
   const adaptive = this.value.startsWith('adaptive');
@@ -771,15 +827,12 @@ function applyPreset(name, card) {
     .then(r => r.json())
     .then(cfg => {
       for (const [key, val] of Object.entries(cfg)) {
-        if (key === 'formats') continue;
+        // Output choices belong to the job, not the preset: keep formats and DPI as set
+        if (key === 'formats' || key === 'dpi') continue;
         const el = document.getElementById('f-' + key);
         if (!el) continue;
         if (el.type === 'checkbox') el.checked = val === true;
         else { el.value = (val === null || val === undefined) ? '' : val; el.dispatchEvent(new Event('change')); }
-      }
-      if (Array.isArray(cfg.formats)) {
-        document.getElementById('fmt-svg').checked = cfg.formats.includes('svg');
-        document.getElementById('fmt-eps').checked = cfg.formats.includes('eps');
       }
       // Apply color picker sync for non-null colors
       const fg = cfg.foreground;
@@ -903,13 +956,17 @@ document.getElementById('save-btn').addEventListener('click', async () => {
 });
 
 // ── Full-size modal ───────────────────────────────────────────────────────────
-function openModal(url, title) {
-  document.getElementById('modal-img').src = url;
+function openModal(url, title, fill) {
+  const img = document.getElementById('modal-img');
+  img.src = url;
+  // SVG carries a physical size (mm, from DPI), so fit it to the modal instead
+  img.style.width  = fill ? '100%' : '';
+  img.style.height = fill ? '78vh' : '';
   document.getElementById('modal-title').textContent = title;
   new bootstrap.Modal(document.getElementById('svg-modal')).show();
 }
 document.getElementById('preview-thumb').addEventListener('click', () => {
-  if (svgDataUrl) openModal(svgDataUrl, 'Podgląd SVG — pełny rozmiar');
+  if (svgDataUrl) openModal(svgDataUrl, 'Podgląd SVG — pełny rozmiar', true);
 });
 document.getElementById('source-preview').addEventListener('click', () => {
   if (sourceDataUrl) openModal(sourceDataUrl, 'Podgląd obrazu wejściowego');

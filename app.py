@@ -203,6 +203,7 @@ def convert():
         foreground=s("foreground", "#ffffff"),
         background=bg,
         coord_precision=i("coord_precision", 2),
+        dpi=f("dpi", 96.0),
         formats=tuple(formats),
         output_dir=str(stage_dir),
         # Fall back to original uploaded filename stem, never to the temp-file name

@@ -1,6 +1,9 @@
 """
 raster2vector.py — Configurable raster-to-vector conversion.
 
+Output formats: SVG, EPS, PDF and PLT (HPGL). The `dpi` setting gives every
+format the same physical size: size_mm = pixels / dpi * 25.4.
+
 Configuration sources, applied in order (later wins):
     1. Defaults (in Config dataclass)
     2. Named preset (--preset NAME or `preset=...`)
@@ -17,6 +20,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 import argparse
 import json
+import math
 import sys
 import cv2
 import numpy as np
@@ -111,11 +115,19 @@ class Config:
     """Background fill color, or None / 'none' / 'transparent' for none."""
 
     coord_precision: int = 2
-    """Decimal places in emitted coordinates. 0 = integer, 2 = default."""
+    """Decimal places in emitted coordinates. 0 = integer, 2 = default.
+       Applies in each format's own unit: px (SVG), pt (EPS, PDF).
+       PLT always uses integer plotter units (0.025 mm)."""
+
+    dpi: float = 96.0
+    """Source image resolution in pixels per inch. Sets the physical size of
+       the output in every format: size_mm = pixels / dpi * 25.4.
+       Only scales the result; the traced shape is unchanged.
+       96 = CSS/SVG reference resolution (default)."""
 
     # ---- 9. File output --------------------------------------------------
     formats: Tuple[str, ...] = ("svg", "eps")
-    """Which formats to write. Subset of {'svg', 'eps'}."""
+    """Which formats to write. Subset of FORMATS: {'svg', 'eps', 'pdf', 'plt'}."""
 
     output_dir: str = "."
     output_name: Optional[str] = None
@@ -197,6 +209,34 @@ PRESETS = {
         "foreground": "#000000",
     },
 }
+
+
+# ============================================================================
+# OUTPUT UNITS
+# ============================================================================
+
+FORMATS = ("svg", "eps", "pdf", "plt")
+
+MM_PER_INCH = 25.4
+PT_PER_INCH = 72.0            # PostScript / PDF point
+HPGL_UNITS_PER_INCH = 1016.0  # HPGL plotter unit = 0.025 mm (40 per mm)
+HPGL_FLATTEN_TOL = 2.0        # max curve-to-chord deviation in PLT, plotter
+                              # units (2 = 0.05 mm, below cutter precision)
+
+
+def _fmt_len(v: float) -> str:
+    """Physical length / colour component: up to 3 decimals, no trailing zeros."""
+    s = f"{v:.3f}".rstrip("0").rstrip(".")
+    return "0" if s in ("", "-0") else s
+
+
+def _subpath_array(beziers, h: int, k: float) -> np.ndarray:
+    """Bézier segments of one subpath as an (n, 4, 2) array in a y-up space:
+    image px scaled by `k`, origin at the bottom-left (PostScript, PDF, HPGL)."""
+    s = np.asarray(beziers, dtype=np.float64)
+    out = s * k
+    out[..., 1] = (h - s[..., 1]) * k
+    return out
 
 
 # ============================================================================
@@ -505,9 +545,12 @@ def write_svg(path: Path, w: int, h: int, bezier_chains, cfg: Config):
     bg_rect = ""
     if cfg.background and cfg.background.lower() not in ("none", "transparent"):
         bg_rect = f'<rect width="{w}" height="{h}" fill="{cfg.background}"/>'
+    # Physical size in mm (from dpi); path coordinates stay in image pixels.
+    mm = MM_PER_INCH / cfg.dpi
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" '
-        f'viewBox="0 0 {w} {h}" width="{w}" height="{h}">'
+        f'viewBox="0 0 {w} {h}" '
+        f'width="{_fmt_len(w * mm)}mm" height="{_fmt_len(h * mm)}mm">'
         f'{bg_rect}'
         f'<path d="{d}" fill="{cfg.foreground}" fill-rule="evenodd"/>'
         f'</svg>'
@@ -517,9 +560,12 @@ def write_svg(path: Path, w: int, h: int, bezier_chains, cfg: Config):
 
 def write_eps(path: Path, w: int, h: int, bezier_chains, cfg: Config):
     f = _fmt(cfg.coord_precision)
+    k = PT_PER_INCH / cfg.dpi          # image px -> PostScript points
+    W, H = w * k, h * k
     lines = [
         "%!PS-Adobe-3.0 EPSF-3.0",
-        f"%%BoundingBox: 0 0 {w} {h}",
+        f"%%BoundingBox: 0 0 {math.ceil(W)} {math.ceil(H)}",
+        f"%%HiResBoundingBox: 0 0 {_fmt_len(W)} {_fmt_len(H)}",
         "%%Pages: 1",
         "%%EndComments",
         "%%Page: 1 1",
@@ -528,24 +574,131 @@ def write_eps(path: Path, w: int, h: int, bezier_chains, cfg: Config):
     bg = _hex_to_rgb01(cfg.background)
     if bg is not None:
         lines += [f"{bg[0]} {bg[1]} {bg[2]} setrgbcolor",
-                  f"0 0 {w} {h} rectfill"]
+                  f"0 0 {_fmt_len(W)} {_fmt_len(H)} rectfill"]
     fg = _hex_to_rgb01(cfg.foreground) or (1, 1, 1)
     lines += [f"{fg[0]} {fg[1]} {fg[2]} setrgbcolor", "newpath"]
     for chain in bezier_chains:
         for beziers in chain:
             if not beziers:
                 continue
-            B0 = beziers[0][0]
-            lines.append(f"{f(B0[0])} {f(h - B0[1])} moveto")
-            for _, c1, c2, p3 in beziers:
+            s = _subpath_array(beziers, h, k)
+            lines.append(f"{f(s[0, 0, 0])} {f(s[0, 0, 1])} moveto")
+            for _, c1, c2, p3 in s:
                 lines.append(
-                    f"{f(c1[0])} {f(h - c1[1])} "
-                    f"{f(c2[0])} {f(h - c2[1])} "
-                    f"{f(p3[0])} {f(h - p3[1])} curveto"
+                    f"{f(c1[0])} {f(c1[1])} "
+                    f"{f(c2[0])} {f(c2[1])} "
+                    f"{f(p3[0])} {f(p3[1])} curveto"
                 )
             lines.append("closepath")
     lines += ["eofill", "grestore", "showpage", "%%EOF"]
     path.write_text("\n".join(lines), encoding="ascii")
+
+
+def write_pdf(path: Path, w: int, h: int, bezier_chains, cfg: Config):
+    """Single-page vector PDF. Page size = physical output size (from dpi).
+    Straight segments are written as lines, curves as cubic Béziers,
+    filled with the even-odd rule like SVG/EPS."""
+    f = _fmt(cfg.coord_precision)
+    k = PT_PER_INCH / cfg.dpi          # image px -> PDF points
+    W, H = w * k, h * k
+
+    def rgb(c):
+        return " ".join(_fmt_len(v) for v in c)
+
+    ops = []
+    bg = _hex_to_rgb01(cfg.background)
+    if bg is not None:
+        ops.append(f"{rgb(bg)} rg 0 0 {_fmt_len(W)} {_fmt_len(H)} re f")
+    fg = _hex_to_rgb01(cfg.foreground) or (1, 1, 1)
+    ops.append(f"{rgb(fg)} rg")
+    has_path = False
+    for chain in bezier_chains:
+        for beziers in chain:
+            if not beziers:
+                continue
+            s = _subpath_array(beziers, h, k)
+            is_line = (s[:, 1] == s[:, 0]).all(axis=1) & (s[:, 2] == s[:, 3]).all(axis=1)
+            ops.append(f"{f(s[0, 0, 0])} {f(s[0, 0, 1])} m")
+            for (_, c1, c2, p3), line in zip(s, is_line):
+                if line:
+                    ops.append(f"{f(p3[0])} {f(p3[1])} l")
+                else:
+                    ops.append(f"{f(c1[0])} {f(c1[1])} {f(c2[0])} {f(c2[1])} "
+                               f"{f(p3[0])} {f(p3[1])} c")
+            ops.append("h")
+            has_path = True
+    if has_path:
+        ops.append("f*")
+    content = "\n".join(ops).encode("ascii")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {_fmt_len(W)} {_fmt_len(H)}] "
+         f"/Resources << >> /Contents 4 0 R >>").encode("ascii"),
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+        b"<< /Producer (raster2vector) >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for num, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % num + body + b"\nendobj\n"
+    xref_at = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for off in offsets:
+        out += b"%010d 00000 n \n" % off
+    out += (b"trailer\n<< /Size %d /Root 1 0 R /Info 5 0 R >>\nstartxref\n%d\n%%%%EOF\n"
+            % (len(objects) + 1, xref_at))
+    path.write_bytes(bytes(out))
+
+
+def _flatten_cubics(s: np.ndarray, tol: float) -> np.ndarray:
+    """Flatten a chain of cubic Béziers (n, 4, 2) into a polyline whose
+    deviation from the curves is <= tol. Segments per curve from Wang's
+    formula; straight (degenerate) segments stay a single step."""
+    d1 = s[:, 0] - 2 * s[:, 1] + s[:, 2]
+    d2 = s[:, 1] - 2 * s[:, 2] + s[:, 3]
+    m = np.maximum(np.hypot(d1[:, 0], d1[:, 1]), np.hypot(d2[:, 0], d2[:, 1]))
+    n = np.maximum(1, np.ceil(np.sqrt(0.75 * m / tol))).astype(np.int64)
+    seg = np.repeat(np.arange(len(s)), n)
+    step = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n) + 1
+    t = (step / n[seg])[:, None]
+    u = 1.0 - t
+    p = s[seg]
+    pts = u**3 * p[:, 0] + 3 * u**2 * t * p[:, 1] + 3 * u * t**2 * p[:, 2] + t**3 * p[:, 3]
+    return np.vstack([s[:1, 0], pts])
+
+
+def write_plt(path: Path, w: int, h: int, bezier_chains, cfg: Config):
+    """HPGL cut file for plotters / vinyl cutters (.plt).
+    Units: 40 per mm, origin bottom-left, size from dpi. Holds cut paths
+    only: colours and background are not written. Curves are flattened
+    to straight segments (HPGL_FLATTEN_TOL). Holes are cut before their
+    outer contour so the shape doesn't shift on the material."""
+    k = HPGL_UNITS_PER_INCH / cfg.dpi  # image px -> plotter units
+    cmds = ["IN;", "PA;", "SP1;"]
+    for chain in bezier_chains:
+        for beziers in chain[1:] + chain[:1]:  # holes first, outer contour last
+            if not beziers:
+                continue
+            pts = np.rint(_flatten_cubics(_subpath_array(beziers, h, k),
+                                          HPGL_FLATTEN_TOL)).astype(np.int64)
+            keep = np.ones(len(pts), dtype=bool)
+            keep[1:] = (pts[1:] != pts[:-1]).any(axis=1)
+            pts = pts[keep]
+            if (pts[0] != pts[-1]).any():
+                pts = np.vstack([pts, pts[:1]])
+            if len(pts) < 4:  # collapsed below plotter resolution
+                continue
+            cmds.append(f"PU{pts[0, 0]},{pts[0, 1]};")
+            for i in range(1, len(pts), 64):
+                cmds.append("PD" + ",".join(f"{x},{y}" for x, y in pts[i:i + 64]) + ";")
+    cmds += ["PU0,0;", "SP0;"]
+    path.write_text("\n".join(cmds) + "\n", encoding="ascii")
+
+
+_WRITERS = {"svg": write_svg, "eps": write_eps, "pdf": write_pdf, "plt": write_plt}
 
 
 # ============================================================================
@@ -561,6 +714,8 @@ def vectorize(input_path, cfg: Optional[Config] = None, **overrides):
         vectorize("logo.png", smoothness=1.5, foreground="#ff0000")  # via overrides
     """
     cfg = (cfg or Config()).merged_with(overrides)
+    if not cfg.dpi or cfg.dpi <= 0:
+        raise ValueError(f"dpi must be greater than 0, got {cfg.dpi!r}")
     input_path = Path(input_path)
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -573,17 +728,16 @@ def vectorize(input_path, cfg: Optional[Config] = None, **overrides):
 
     n_sub = sum(len(c) for c in bezier_chains)
     n_seg = sum(len(b) for c in bezier_chains for b in c)
-    print(f"[{stem}] {len(bezier_chains)} shapes, {n_sub} subpaths, {n_seg} segments")
+    mm = MM_PER_INCH / cfg.dpi
+    print(f"[{stem}] {len(bezier_chains)} shapes, {n_sub} subpaths, {n_seg} segments, "
+          f"{w * mm:.1f} x {h * mm:.1f} mm @ {cfg.dpi:g} dpi")
 
     written = []
-    if "svg" in cfg.formats:
-        p = out_dir / f"{stem}.svg"
-        write_svg(p, w, h, bezier_chains, cfg); written.append(p)
-        print(f"  → {p}")
-    if "eps" in cfg.formats:
-        p = out_dir / f"{stem}.eps"
-        write_eps(p, w, h, bezier_chains, cfg); written.append(p)
-        print(f"  → {p}")
+    for fmt in FORMATS:
+        if fmt in cfg.formats:
+            p = out_dir / f"{stem}.{fmt}"
+            _WRITERS[fmt](p, w, h, bezier_chains, cfg); written.append(p)
+            print(f"  → {p}")
     return written
 
 
@@ -593,7 +747,7 @@ def vectorize(input_path, cfg: Optional[Config] = None, **overrides):
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Configurable raster → vector (SVG + EPS) converter.",
+        description="Configurable raster → vector (SVG, EPS, PDF, PLT) converter.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("input", nargs="?", help="Input raster file (.png/.jpg/...)")
@@ -613,7 +767,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                            default=None, help=f.__doc__ or "")
         elif f.name == "formats":
             p.add_argument(flag, dest=f.name, nargs="+",
-                           choices=["svg", "eps"], default=None,
+                           choices=list(FORMATS), default=None,
                            help="Output formats")
         elif f.type in ("int",) or isinstance(f.default, int):
             p.add_argument(flag, dest=f.name, type=int, default=None)

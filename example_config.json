@@ -11,5 +11,6 @@
   "foreground": "#ffffff",
   "background": "#000000",
   "coord_precision": 2,
+  "dpi": 96,
   "formats": ["svg", "eps"]
 }
