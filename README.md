@@ -1,6 +1,8 @@
 # Raster → Wektor
 
-A local, browser-accessible platform for converting raster images (PNG, JPG, BMP, TIFF, WEBP) into clean vector graphics (SVG, EPS). Optimised for plotter and vinyl-cutter workflows, but suitable for any raster-to-vector task.
+A local, browser-accessible platform for converting raster images (PNG, JPG, BMP, TIFF, WEBP) into clean vector graphics (SVG, EPS, PDF, PLT). Optimised for plotter and vinyl-cutter workflows, but suitable for any raster-to-vector task.
+
+**Version 1.1** · see [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 ---
 
@@ -9,6 +11,8 @@ A local, browser-accessible platform for converting raster images (PNG, JPG, BMP
 - **Full browser UI** — upload, configure, preview, and save without touching the terminal
 - **9 built-in presets** — Plotter/Cutter, Logo, Icon, Silhouette, Sketch, High-Fidelity, Compact, Stencil, Dark-on-Light
 - **All parameters exposed** — every conversion setting is available with inline help (hover `?`)
+- **4 output formats** — SVG, EPS, PDF and PLT (HPGL), e.g. for SignMaster and other cutter software
+- **Physical size (DPI)** — every format gets the same real-world size in millimetres
 - **Live SVG preview** — hover to zoom 4.4×, click for fullscreen; same for the input image
 - **Staging workflow** — files are held in a temp folder until you explicitly save them
 - **Native folder picker** — OS-level dialog for choosing the output directory
@@ -54,9 +58,10 @@ Click **Zakończ** in the top-right corner to shut the server down and clean up 
 
 1. **Upload** a PNG / JPG / BMP / TIFF / WEBP image (max 100 MB)
 2. **Choose a preset** or tweak parameters manually
-3. Click **Konwertuj** — the result appears as a live SVG preview
-4. **Hover** the thumbnail to zoom in; **click** for fullscreen
-5. Choose an output folder and click **Zapisz pliki**
+3. **Tick the output formats** and set **Rozdzielczość (DPI)** — the line under the field shows the final size in mm
+4. Click **Konwertuj** — the result appears as a live SVG preview
+5. **Hover** the thumbnail to zoom in; **click** for fullscreen
+6. Choose an output folder and click **Zapisz pliki**
 
 If a file with the same name already exists in the target folder, the saved file gets an `_1`, `_2`, … suffix automatically.
 
@@ -75,6 +80,21 @@ If a file with the same name already exists in the target folder, the saved file
 | **Kompaktowy** | Inline SVG, web graphics — minimal file size |
 | **Szablon** | Painting stencils, laser cutting — no interior holes |
 | **Ciemne na jasnym** | Black logo on white background, stamps, text scans |
+
+Presets change the tracing settings only. The chosen output formats and DPI stay as you set them.
+
+---
+
+## Output formats
+
+| Format | Best for |
+|---|---|
+| **SVG** | Inkscape, browsers, most cutter software |
+| **EPS** | Older cutter drivers, Adobe Illustrator, CorelDRAW |
+| **PDF** | SignMaster V5 and any PDF-capable software; page size is the physical output size |
+| **PLT** | HPGL cut file for plotters and vinyl cutters; cut paths only (no fill, no background), curves flattened to segments within 0.05 mm, holes cut before outer contours |
+
+All formats share the same physical size, set by `dpi`: size in mm = pixels ÷ dpi × 25.4. For example, a 1200 px wide image is 101.6 mm wide at 300 dpi and 317.5 mm at the default 96 dpi. DPI only scales the result; it does not change the traced shape.
 
 ---
 
@@ -107,7 +127,8 @@ All parameters are available in the UI and as CLI flags. The defaults are design
 | `foreground` | `#ffffff` | Shape fill colour (`#rrggbb`) |
 | `background` | `#000000` | Document background colour, or `none` for transparent |
 | `coord_precision` | `2` | Decimal places in output coordinates (0 = integer) |
-| `formats` | `svg, eps` | Output formats (`svg`, `eps`, or both) |
+| `dpi` | `96` | Source image resolution (pixels per inch); sets the physical output size |
+| `formats` | `svg, eps` | Output formats, any combination of `svg`, `eps`, `pdf`, `plt` |
 
 ---
 
@@ -119,11 +140,14 @@ All parameters are available in the UI and as CLI flags. The defaults are design
 # Basic conversion (uses defaults)
 python raster2vector.py logo.png
 
-# Apply a preset
-python raster2vector.py logo.png --preset ploter
+# Apply a preset (the "Ploter / Cutter" preset is available in the web UI only)
+python raster2vector.py logo.png --preset dark_on_light
 
 # Override individual parameters
 python raster2vector.py logo.png --upscale 4 --foreground "#000000" --background none
+
+# PDF + PLT for cutter software, scanned at 300 dpi (sets the physical size)
+python raster2vector.py logo.png --formats pdf plt --dpi 300
 
 # Load settings from a JSON file
 python raster2vector.py logo.png --config my_settings.json
@@ -142,8 +166,9 @@ python raster2vector.py --list-presets
   "channel": "luma",
   "upscale": 2,
   "foreground": "#000000",
-  "background": null,
-  "formats": ["svg", "eps"]
+  "background": "none",
+  "dpi": 96,
+  "formats": ["svg", "eps", "pdf", "plt"]
 }
 ```
 
@@ -156,8 +181,13 @@ vector-platfrom/
 ├── app.py                  Flask web application
 ├── raster2vector.py        Core conversion engine + CLI
 ├── requirements.txt        Python dependencies
+├── run.bat                 Windows launcher (update, set up, start)
+├── example_config.json     Example settings file for the CLI (--config)
 ├── templates/
 │   └── index.html          Single-page browser UI
+├── CHANGELOG.md            Version history
+├── README.md
+├── LICENSE
 └── staging/                Temporary conversion output (auto-cleaned, not committed)
 ```
 
