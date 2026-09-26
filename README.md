@@ -14,6 +14,10 @@ A local, browser-accessible platform for converting raster images (PNG, JPG, BMP
 - **4 output formats** — SVG, EPS, PDF and PLT (HPGL), e.g. for SignMaster and other cutter software
 - **Physical size (DPI)** — every format gets the same real-world size in millimetres
 - **Live SVG preview** — hover to zoom 4.4×, click for fullscreen; same for the input image
+- **Helpful hints** — warns when the background would be traced or cut as a frame, with a one-click fix
+- **Transparent images** — transparent PNG, WEBP and TIFF files are handled automatically
+- **Paste from clipboard** — Ctrl+V loads a copied image
+- **Works offline** — styling, icons and scripts are bundled with the app
 - **Staging workflow** — files are held in a temp folder until you explicitly save them
 - **Native folder picker** — OS-level dialog for choosing the output directory
 - **CLI mode** — `raster2vector.py` can also be used directly from the command line
@@ -56,7 +60,7 @@ Click **Zakończ** in the top-right corner to shut the server down and clean up 
 
 ## Workflow
 
-1. **Upload** a PNG / JPG / BMP / TIFF / WEBP image (max 100 MB)
+1. **Upload** a PNG / JPG / BMP / TIFF / WEBP image (max 100 MB), or paste one with Ctrl+V. If a hint appears under the preview, click its button
 2. **Choose a preset** or tweak parameters manually
 3. **Tick the output formats** and set **Rozdzielczość (DPI)** — the line under the field shows the final size in mm
 4. Click **Konwertuj** — the result appears as a live SVG preview
@@ -94,7 +98,7 @@ Presets change the tracing settings only. The chosen output formats and DPI stay
 | **PDF** | SignMaster V5 and any PDF-capable software; page size is the physical output size |
 | **PLT** | HPGL cut file for plotters and vinyl cutters; cut paths only (no fill, no background), curves flattened to segments within 0.05 mm, holes cut before outer contours |
 
-All formats share the same physical size, set by `dpi`: size in mm = pixels ÷ dpi × 25.4. For example, a 1200 px wide image is 101.6 mm wide at 300 dpi and 317.5 mm at the default 96 dpi. DPI only scales the result; it does not change the traced shape.
+All formats share the same physical size, set by `dpi`: size in mm = pixels ÷ dpi × 25.4. For example, a 1200 px wide image is 101.6 mm wide at 300 dpi and 317.5 mm at the default 96 dpi. DPI only scales the result; it does not change the traced shape. The web UI fills in DPI automatically when the image file stores its resolution.
 
 ---
 
@@ -185,6 +189,7 @@ vector-platfrom/
 ├── example_config.json     Example settings file for the CLI (--config)
 ├── templates/
 │   └── index.html          Single-page browser UI
+├── static/vendor/          Bootstrap and Bootstrap Icons, bundled for offline use
 ├── CHANGELOG.md            Version history
 ├── README.md
 ├── LICENSE
@@ -201,6 +206,7 @@ vector-platfrom/
 | `numpy` | Array operations throughout the pipeline |
 | `scipy` | Periodic Gaussian smoothing of contour coordinates |
 | `flask` | Local web server and REST API |
+| `pillow` | Reads the resolution (DPI) stored in image files |
 
 ---
 
