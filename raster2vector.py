@@ -3,6 +3,8 @@ raster2vector.py — Configurable raster-to-vector conversion.
 
 Output formats: SVG, EPS, PDF and PLT (HPGL). The `dpi` setting gives every
 format the same physical size: size_mm = pixels / dpi * 25.4.
+Transparent PNG / WEBP / TIFF images are placed on a background that contrasts
+with their visible content before tracing.
 
 Configuration sources, applied in order (later wins):
     1. Defaults (in Config dataclass)
@@ -271,23 +273,71 @@ def _hex_to_rgb01(s: Optional[str]):
 # PIPELINE
 # ============================================================================
 
-def to_grayscale(image_path: Path, channel: str) -> np.ndarray:
-    if channel == "luma":
-        img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-    else:
-        bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise FileNotFoundError(image_path)
-        b, g, r = cv2.split(bgr)
-        if channel == "red":   img = r
-        elif channel == "green": img = g
-        elif channel == "blue":  img = b
-        elif channel == "max":   img = np.maximum(np.maximum(r, g), b)
-        elif channel == "min":   img = np.minimum(np.minimum(r, g), b)
-        else: raise ValueError(f"Bad channel: {channel}")
+CHANNELS = ("luma", "red", "green", "blue", "max", "min")
+
+
+class ImageReadError(ValueError):
+    """The file could not be decoded as an image (unsupported format or damaged)."""
+
+
+def _decode(data: np.ndarray, flags: int, image_path) -> np.ndarray:
+    img = cv2.imdecode(data, flags) if data.size else None
     if img is None:
-        raise FileNotFoundError(image_path)
+        raise ImageReadError(f"Cannot read image (unsupported format or damaged file): {image_path}")
     return img
+
+
+def _may_have_alpha(data: np.ndarray) -> bool:
+    """PNG, WEBP and TIFF can carry transparency (JPEG can't; BMP alpha is unreliable)."""
+    head = data[:12].tobytes()
+    return (head.startswith(b"\x89PNG") or head[:4] in (b"II*\x00", b"MM\x00*")
+            or (head[:4] == b"RIFF" and head[8:12] == b"WEBP"))
+
+
+def _flatten_transparency(data: np.ndarray) -> Optional[np.ndarray]:
+    """For an image with real transparency, return it as BGR placed on a
+    background that contrasts with its visible content: white behind dark
+    content, black behind light content. Transparent areas then behave like
+    the background of an ordinary image. Returns None if there's no transparency."""
+    if not _may_have_alpha(data):
+        return None
+    img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+    if img is None or img.ndim != 3 or img.shape[2] not in (2, 4):
+        return None
+    if img.dtype == np.uint16:
+        img = (img >> 8).astype(np.uint8)
+    elif img.dtype != np.uint8:
+        return None
+    alpha = img[..., -1]
+    if alpha.min() == 255 or alpha.max() == 0:  # fully opaque, or alpha unused
+        return None
+    color = img[..., :-1]
+    bgr = cv2.cvtColor(color[..., 0], cv2.COLOR_GRAY2BGR) if color.shape[2] == 1 else color
+    visible = alpha >= 128
+    dark = visible.any() and cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)[visible].mean() < 128
+    bg = 255.0 if dark else 0.0
+    a = alpha.astype(np.float32)[..., None] / 255.0
+    return np.clip(bgr.astype(np.float32) * a + bg * (1.0 - a) + 0.5, 0, 255).astype(np.uint8)
+
+
+def to_grayscale(image_path: Path, channel: str) -> np.ndarray:
+    """Load an image as 8-bit grayscale using the given channel.
+    Reads through a byte buffer so non-ASCII paths work on Windows."""
+    if channel not in CHANNELS:
+        raise ValueError(f"Bad channel: {channel}")
+    data = np.fromfile(str(image_path), dtype=np.uint8)
+    flat = _flatten_transparency(data)
+    if channel == "luma":
+        if flat is not None:
+            return cv2.cvtColor(flat, cv2.COLOR_BGR2GRAY)
+        return _decode(data, cv2.IMREAD_GRAYSCALE, image_path)
+    bgr = flat if flat is not None else _decode(data, cv2.IMREAD_COLOR, image_path)
+    b, g, r = cv2.split(bgr)
+    if channel == "red":   return r
+    if channel == "green": return g
+    if channel == "blue":  return b
+    if channel == "max":   return np.maximum(np.maximum(r, g), b)
+    return np.minimum(np.minimum(r, g), b)
 
 
 def threshold_image(gray: np.ndarray, cfg: Config) -> np.ndarray:
@@ -340,9 +390,10 @@ def morphology(binary: np.ndarray, cfg: Config) -> np.ndarray:
 
 def find_chains(binary: np.ndarray, cfg: Config):
     min_area_scaled = cfg.min_area * (cfg.upscale ** 2)
-    contours, hierarchy = cv2.findContours(
-        binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE
-    )
+    # Without holes only the outermost contours count: shapes inside a hole are
+    # covered by the solid outer shape (with even-odd fill they'd become holes).
+    mode = cv2.RETR_CCOMP if cfg.include_holes else cv2.RETR_EXTERNAL
+    contours, hierarchy = cv2.findContours(binary, mode, cv2.CHAIN_APPROX_NONE)
     if hierarchy is None:
         return []
     hierarchy = hierarchy[0]
@@ -528,11 +579,12 @@ def write_svg(path: Path, w: int, h: int, bezier_chains, cfg: Config):
         for beziers in chain:
             if not beziers:
                 continue
-            B0 = beziers[0][0]
-            parts.append(f"M{f(B0[0])},{f(B0[1])}")
-            for _, c1, c2, p3 in beziers:
-                # If c1==B0 and c2==p3 (degenerate), emit L instead of C
-                if np.allclose(c1, beziers[0][0]) and np.allclose(c2, p3) and cfg.output_mode == "polygon":
+            s = np.asarray(beziers, dtype=np.float64)
+            # Straight segments are stored as degenerate cubics: write them as L
+            is_line = (s[:, 1] == s[:, 0]).all(axis=1) & (s[:, 2] == s[:, 3]).all(axis=1)
+            parts.append(f"M{f(s[0, 0, 0])},{f(s[0, 0, 1])}")
+            for (_, c1, c2, p3), line in zip(s, is_line):
+                if line:
                     parts.append(f"L{f(p3[0])},{f(p3[1])}")
                 else:
                     parts.append(
@@ -739,6 +791,39 @@ def vectorize(input_path, cfg: Optional[Config] = None, **overrides):
             _WRITERS[fmt](p, w, h, bezier_chains, cfg); written.append(p)
             print(f"  → {p}")
     return written
+
+
+def read_dpi(image_path) -> Optional[float]:
+    """Resolution stored in the image file (PNG pHYs, JPEG JFIF/EXIF, TIFF, BMP).
+    None when absent or implausible, or when Pillow isn't installed."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(str(image_path)) as im:
+            dpi = im.info.get("dpi")
+        x = float(dpi[0] if isinstance(dpi, (tuple, list)) else dpi)
+    except Exception:
+        return None
+    return round(x, 1) if 10 <= x <= 20000 else None
+
+
+def analyze_image(image_path, cfg: Optional[Config] = None) -> dict:
+    """Quick check for the web UI before converting.
+
+    Returns the image size as the converter sees it, the DPI stored in the
+    file, and `suggest_invert`: the `invert` setting that keeps the image
+    border (the background) out of the trace. None when the border is mixed,
+    e.g. photos or designs that run off the edge."""
+    cfg = (cfg or Config()).merged_with({"invert": False, "upscale": 1})
+    binary, w, h = preprocess(Path(image_path), cfg)
+    b = max(1, round(min(w, h) * 0.02))
+    border = np.concatenate([binary[:b].ravel(), binary[-b:].ravel(),
+                             binary[:, :b].ravel(), binary[:, -b:].ravel()]) > 0
+    ratio = float(border.mean())  # share of the border traced without invert
+    suggest = True if ratio > 0.75 else False if ratio < 0.25 else None
+    return {"width": w, "height": h, "dpi": read_dpi(image_path), "suggest_invert": suggest}
 
 
 # ============================================================================

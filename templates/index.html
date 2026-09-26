@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Raster → Wektor</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
+<link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
 <style>
 /* ── Base ─────────────────────────────────────────────────────────────────── */
 body { background:#f0f2f5; font-family:system-ui,sans-serif; }
@@ -134,6 +134,14 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 .site-footer { border-top:1px solid #e5e7eb; margin-top:2.5rem; padding:1.4rem 0; text-align:center; color:#9ca3af; font-size:.8rem; }
 .site-footer strong { color:#6b7280; font-weight:600; }
+
+/* ── Hints ───────────────────────────────────────────────────────────────── */
+.invert-hint {
+  display:inline-flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:.5rem;
+  margin-top:.6rem; padding:.5rem .8rem; max-width:560px;
+  background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; color:#92400e; font-size:.84rem;
+}
+.frame-note { color:#92400e; font-size:.8rem; }
 </style>
 </head>
 <body>
@@ -164,15 +172,19 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
       <div class="upload-zone" id="upload-zone" onclick="document.getElementById('img-input').click()">
         <i class="bi bi-cloud-upload up-ico"></i>
         <strong>Kliknij lub przeciągnij plik tutaj</strong>
-        <div class="text-muted small mt-1">PNG, JPG, BMP, TIFF, WEBP — maks. 100 MB</div>
+        <div class="text-muted small mt-1">PNG, JPG, BMP, TIFF, WEBP — maks. 100 MB<br>lub wklej obraz ze schowka (Ctrl+V)</div>
       </div>
-      <input type="file" id="img-input" name="image" accept="image/*" class="d-none" required>
+      <input type="file" id="img-input" name="image" accept=".png,.jpg,.jpeg,.jpe,.jfif,.bmp,.tif,.tiff,.webp" class="d-none" required>
       <div id="source-wrap" class="mt-3 text-center d-none">
         <div class="preview-outer d-inline-block">
           <img id="source-preview" src="" alt="Podgląd">
         </div>
         <div class="preview-hint mt-1">Najedź = powiększ<br>kliknij = pełny ekran</div>
         <div id="source-name" class="text-muted small mt-1"></div>
+        <div id="invert-hint" class="invert-hint d-none">
+          <span><i class="bi bi-lightbulb me-1"></i><span id="invert-hint-text"></span></span>
+          <button type="button" class="btn btn-sm btn-outline-primary py-0" id="invert-hint-btn"></button>
+        </div>
       </div>
     </div>
   </div>
@@ -420,6 +432,9 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
           <i class="bi bi-circle-half me-1"></i>Przezroczyste tło
         </button>
       </div>
+      <div class="col-12 frame-note d-none" id="bg-frame-note">
+        <i class="bi bi-exclamation-triangle me-1"></i>W plikach SVG, EPS i PDF tło zostanie zapisane jako prostokąt, który program do cięcia wytnie jako ramkę. Do cięcia kliknij „Przezroczyste tło”.
+      </div>
     </div>
   </div>
 
@@ -544,12 +559,17 @@ label.form-label { display:flex; align-items:center; margin-bottom:.35rem; font-
   Created by <strong>Paweł Jonczyk</strong>
 </footer>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
 <script>
 const DESKTOP = {{ desktop | tojson }};
 let currentSession = null;
 let svgDataUrl     = null;
 let sourceDataUrl  = null;
+const DEFAULT_DPI   = {{ default.dpi | tojson }};
+const SUPPORTED_EXT = ['png', 'jpg', 'jpeg', 'jpe', 'jfif', 'bmp', 'tif', 'tiff', 'webp'];
+let imgDims       = null;   // {w, h} as the converter sees the image (from /analyze)
+let dpiFromFile   = false;  // DPI field holds the resolution stored in the image file
+let suggestInvert = null;   // invert setting that keeps the background out of the trace
 
 // ── Help content (HTML, shown in popovers) ────────────────────────────────────
 const HELP = {
@@ -765,9 +785,44 @@ zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add(
 zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
 zone.addEventListener('drop', e => {
   e.preventDefault(); zone.classList.remove('dragover');
-  if (e.dataTransfer.files[0]) { imgInput.files = e.dataTransfer.files; showSourcePreview(e.dataTransfer.files[0]); }
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0], true);
 });
-imgInput.addEventListener('change', e => { if (e.target.files[0]) showSourcePreview(e.target.files[0]); });
+imgInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0], false); });
+
+// Paste an image from the clipboard (Ctrl+V). Pasting text into fields works as before.
+document.addEventListener('paste', e => {
+  const item = [...(e.clipboardData ? e.clipboardData.items : [])]
+    .find(it => it.kind === 'file' && it.type.startsWith('image/'));
+  if (!item) return;
+  e.preventDefault();
+  const blob = item.getAsFile();
+  const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/bmp': 'bmp',
+                'image/webp': 'webp', 'image/tiff': 'tiff' }[blob.type];
+  if (!ext) { showError('Obraz ze schowka ma nieobsługiwany format. Obsługiwane: PNG, JPG, BMP, TIFF, WEBP.'); return; }
+  handleFile(new File([blob], `wklejony_obraz.${ext}`, { type: blob.type }), true);
+});
+
+// fromOutside: drop / paste (the file input must be filled); otherwise the picker already holds it
+function handleFile(file, fromOutside) {
+  const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+  if (!SUPPORTED_EXT.includes(ext)) {
+    showError(`Nieobsługiwany format pliku „${file.name}”. Obsługiwane: PNG, JPG, BMP, TIFF, WEBP.`);
+    if (!fromOutside) resetSource();  // the picker replaced the previous image
+    return;
+  }
+  if (fromOutside) { const dt = new DataTransfer(); dt.items.add(file); imgInput.files = dt.files; }
+  elHide('error-alert');
+  imgDims = null; suggestInvert = null;
+  updateInvertHint();
+  showSourcePreview(file);
+  analyzeImage(true);
+}
+function resetSource() {
+  imgInput.value = ''; imgDims = null; suggestInvert = null;
+  document.getElementById('source-wrap').classList.add('d-none');
+  zone.style.padding = '';
+  updateDpiSize(); updateInvertHint();
+}
 function showSourcePreview(file) {
   const reader = new FileReader();
   reader.onload = e => {
@@ -785,14 +840,78 @@ const srcImg = document.getElementById('source-preview');
 function updateDpiSize() {
   const out = document.getElementById('dpi-size');
   const dpi = parseFloat(document.getElementById('f-dpi').value);
-  if (!(dpi > 0))           { out.textContent = 'Podaj DPI większe od 0.'; return; }
-  if (!srcImg.naturalWidth) { out.textContent = 'Wczytaj obraz, aby zobaczyć rozmiar wyniku.'; return; }
+  // TIFF has no browser preview, so prefer the size reported by the converter
+  const w = imgDims ? imgDims.w : srcImg.naturalWidth;
+  const h = imgDims ? imgDims.h : srcImg.naturalHeight;
+  if (!(dpi > 0))                    { out.textContent = 'Podaj DPI większe od 0.'; return; }
+  if (!imgInput.files.length || !w)  { out.textContent = 'Wczytaj obraz, aby zobaczyć rozmiar wyniku.'; return; }
   const mm = px => (px / dpi * 25.4).toLocaleString('pl-PL', { maximumFractionDigits: 1 });
-  out.textContent = `Rozmiar wyniku: ${mm(srcImg.naturalWidth)} × ${mm(srcImg.naturalHeight)} mm`;
+  out.textContent = `Rozmiar wyniku: ${mm(w)} × ${mm(h)} mm` + (dpiFromFile ? ' · DPI odczytane z pliku' : '');
 }
 srcImg.addEventListener('load', updateDpiSize);
-document.getElementById('f-dpi').addEventListener('input', updateDpiSize);
+document.getElementById('f-dpi').addEventListener('input', () => { dpiFromFile = false; updateDpiSize(); });
 updateDpiSize();
+
+// ── Image check: size, DPI from the file, background hint ────────────────────
+let analyzeSeq = 0, analyzedKey = '', analyzeTimer = null;
+const analyzeKey = () => ['channel', 'threshold_mode'].map(k => document.getElementById('f-' + k).value).join('|');
+
+async function analyzeImage(newImage) {
+  if (!imgInput.files.length) return;
+  const seq = ++analyzeSeq;
+  analyzedKey = analyzeKey();
+  const fd = new FormData();
+  fd.append('image', imgInput.files[0]);
+  ['channel', 'threshold_mode', 'threshold_value', 'adaptive_block_size', 'adaptive_C', 'pre_blur_sigma']
+    .forEach(k => fd.append(k, document.getElementById('f-' + k).value));
+  try {
+    const res = await fetch('/analyze', { method: 'POST', body: fd });
+    const d = await res.json();
+    if (seq !== analyzeSeq) return;  // a newer image or setting took over
+    if (!res.ok || d.error) { showError(d.error || 'Nie można sprawdzić obrazu.'); return; }
+    imgDims = { w: d.width, h: d.height };
+    suggestInvert = d.suggest_invert;
+    if (newImage) {
+      const dpiEl = document.getElementById('f-dpi');
+      if (d.dpi)            { dpiEl.value = d.dpi; dpiFromFile = true; }
+      else if (dpiFromFile) { dpiEl.value = DEFAULT_DPI; dpiFromFile = false; }
+    }
+    updateDpiSize(); updateInvertHint();
+  } catch (_) { /* the check only adds hints; converting works without it */ }
+}
+// Colour channel and threshold mode decide what counts as background: check again
+['f-channel', 'f-threshold_mode'].forEach(id => document.getElementById(id).addEventListener('change', () => {
+  if (!imgInput.files.length || analyzeKey() === analyzedKey) return;
+  clearTimeout(analyzeTimer);
+  analyzeTimer = setTimeout(() => analyzeImage(false), 250);
+}));
+
+function updateInvertHint() {
+  const box = document.getElementById('invert-hint');
+  const inverted = document.getElementById('f-invert').checked;
+  if (suggestInvert === null || suggestInvert === inverted || !imgInput.files.length) {
+    box.classList.add('d-none'); return;
+  }
+  document.getElementById('invert-hint-text').textContent = suggestInvert
+    ? 'Wygląda na ciemny wzór na jasnym tle. Bez opcji „Odwróć” tło zostanie obrysowane jako ramka.'
+    : 'Wygląda na jasny wzór na ciemnym tle. Przy zaznaczonej opcji „Odwróć” tło zostanie obrysowane jako ramka.';
+  document.getElementById('invert-hint-btn').textContent = suggestInvert ? 'Zaznacz „Odwróć”' : 'Odznacz „Odwróć”';
+  box.classList.remove('d-none');
+}
+document.getElementById('invert-hint-btn').addEventListener('click', () => {
+  document.getElementById('f-invert').checked = suggestInvert;
+  updateInvertHint();
+});
+document.getElementById('f-invert').addEventListener('change', updateInvertHint);
+
+// ── Background colour = frame in cutting software ────────────────────────────
+function updateBgWarning() {
+  const v = document.getElementById('f-background').value.trim().toLowerCase();
+  document.getElementById('bg-frame-note').classList.toggle('d-none', v === 'none' || v === 'transparent');
+}
+['input', 'change'].forEach(ev => document.getElementById('f-background').addEventListener(ev, updateBgWarning));
+document.getElementById('bg-picker').addEventListener('input', updateBgWarning);
+updateBgWarning();
 
 // ── Threshold mode visibility ─────────────────────────────────────────────────
 document.getElementById('f-threshold_mode').addEventListener('change', function () {
@@ -813,6 +932,7 @@ wireColor('fg-picker','f-foreground');
 wireColor('bg-picker','f-background');
 document.getElementById('btn-transparent').addEventListener('click', () => {
   document.getElementById('f-background').value = 'none';
+  updateBgWarning();
 });
 
 // ── Preset cards ──────────────────────────────────────────────────────────────
@@ -845,6 +965,8 @@ function applyPreset(name, card) {
         const bg = cfg.background;
         if (bg && /^#[0-9a-fA-F]{6}$/.test(bg)) document.getElementById('bg-picker').value = bg;
       }
+      updateInvertHint();
+      updateBgWarning();
     });
 }
 

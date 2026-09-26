@@ -6,10 +6,12 @@ import tempfile
 import os
 import base64
 import uuid
+import re
 import shutil
 import threading
 
-from raster2vector import Config, vectorize, PRESETS
+from raster2vector import (Config, vectorize, analyze_image, ImageReadError,
+                           PRESETS, FORMATS, CHANNELS)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB
@@ -143,87 +145,209 @@ def pick_dir():
         return jsonify({"error": str(exc), "path": ""}), 500
 
 
+# ── Uploads, form parsing, validation ────────────────────────────────────────
+
+ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".jpe", ".jfif", ".bmp", ".tif", ".tiff", ".webp"}
+THRESHOLD_MODES = ("otsu", "manual", "adaptive_mean", "adaptive_gaussian")
+UPSCALE_METHODS = ("nearest", "linear", "cubic", "lanczos")
+OUTPUT_MODES = ("bezier", "polygon")
+NAMED_COLORS = ("black", "white", "red", "green", "blue", "gray")  # also understood by EPS/PDF
+_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+MSG_UNREADABLE = "Nie można odczytać obrazu — plik jest uszkodzony albo ma nieobsługiwany format."
+
+
+def _error(msg: str, status: int = 400):
+    return jsonify({"error": msg}), status
+
+
+@app.errorhandler(413)
+def _too_large(_exc):
+    return _error("Plik jest za duży — maksymalnie 100 MB.", 413)
+
+
+def _upload_problem(file) -> str | None:
+    if not file or not file.filename:
+        return "Nie przesłano pliku obrazu."
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_EXT:
+        return (f"Nieobsługiwany format pliku „{ext or 'bez rozszerzenia'}”. "
+                "Obsługiwane: PNG, JPG, BMP, TIFF, WEBP.")
+    return None
+
+
+def _save_upload(file) -> str:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix.lower()) as tmp:
+        file.save(tmp.name)
+        return tmp.name
+
+
+def _form_bool(form, key, default=False):
+    v = form.get(key)
+    return default if v is None else v.lower() in ("true", "on", "1", "yes")
+
+
+def _form_int(form, key, default=0):
+    try:
+        return int(form.get(key, default))
+    except (ValueError, TypeError):
+        return default
+
+
+def _form_float(form, key, default=0.0):
+    try:
+        return float(form.get(key, default))
+    except (ValueError, TypeError):
+        return default
+
+
+def _form_str(form, key, default=""):
+    return (form.get(key) or default).strip()
+
+
+def _safe_stem(name: str) -> str | None:
+    """File name without folders or characters Windows doesn't allow."""
+    name = Path(name.replace("\\", "/")).name
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")
+    return name or None
+
+
+def _color_ok(value: str) -> bool:
+    return bool(_HEX_COLOR.match(value)) or value.lower() in NAMED_COLORS
+
+
+def _validate(cfg: Config) -> list[str]:
+    """Polish messages for settings the converter can't use (empty = all OK).
+    Fields hidden in the UI for the current mode are not checked."""
+    problems = []
+
+    def need(ok, label, msg):
+        if not ok:
+            problems.append(f"Pole „{label}”: {msg}.")
+
+    need(cfg.channel in CHANNELS, "Kanał koloru", "nieznana wartość")
+    need(cfg.threshold_mode in THRESHOLD_MODES, "Tryb progowania", "nieznana wartość")
+    if cfg.threshold_mode == "manual":
+        need(0 <= cfg.threshold_value <= 255, "Wartość progu", "dozwolony zakres to 0–255")
+    if cfg.threshold_mode.startswith("adaptive"):
+        need(cfg.adaptive_block_size >= 3 and cfg.adaptive_block_size % 2 == 1,
+             "Rozmiar bloku adaptacyjnego", "wymagana liczba nieparzysta, co najmniej 3")
+    need(1 <= cfg.upscale <= 4, "Skalowanie w górę", "dozwolony zakres to 1–4")
+    need(cfg.upscale_method in UPSCALE_METHODS, "Metoda skalowania", "nieznana wartość")
+    for label, value in (("Rozmycie wstępne σ", cfg.pre_blur_sigma), ("Otwarcie", cfg.morph_open),
+                         ("Zamknięcie", cfg.morph_close), ("Dylatacja", cfg.dilate),
+                         ("Erozja", cfg.erode), ("Minimalna powierzchnia", cfg.min_area),
+                         ("Wygładzanie σ", cfg.contour_sigma)):
+        need(value >= 0, label, "wartość nie może być ujemna")
+    need(cfg.resample_spacing > 0, "Odstęp próbkowania", "wartość musi być większa od 0")
+    need(cfg.output_mode in OUTPUT_MODES, "Tryb wyjścia", "nieznana wartość")
+    if cfg.output_mode == "bezier" and cfg.detect_corners:
+        need(1 <= cfg.corner_angle_deg <= 179, "Kąt narożnika", "dozwolony zakres to 1–179")
+    need(_color_ok(cfg.foreground), "Kolor wzoru",
+         f"nieprawidłowy kolor „{cfg.foreground}”, użyj formatu #rrggbb")
+    if cfg.background is not None:
+        need(_color_ok(cfg.background), "Kolor tła",
+             f"nieprawidłowy kolor „{cfg.background}”, użyj formatu #rrggbb lub none")
+    need(0 <= cfg.coord_precision <= 6, "Precyzja współrzędnych", "dozwolony zakres to 0–6")
+    need(cfg.dpi > 0, "Rozdzielczość (DPI)", "wartość musi być większa od 0")
+    return problems
+
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    """Check run right after an image is chosen: size, DPI stored in the file
+    and which `invert` setting keeps the background out of the trace."""
+    file = request.files.get("image")
+    problem = _upload_problem(file)
+    if problem:
+        return _error(problem)
+    form = request.form
+    cfg = Config(
+        channel=_form_str(form, "channel", "luma"),
+        threshold_mode=_form_str(form, "threshold_mode", "otsu"),
+        threshold_value=_form_int(form, "threshold_value", 128),
+        adaptive_block_size=_form_int(form, "adaptive_block_size", 31),
+        adaptive_C=_form_int(form, "adaptive_C", 5),
+        pre_blur_sigma=_form_float(form, "pre_blur_sigma", 1.2),
+    )
+    if _validate(cfg):  # unusable threshold settings: judge with the defaults instead
+        cfg = Config(channel=cfg.channel if cfg.channel in CHANNELS else "luma")
+    tmp_path = None
+    try:
+        tmp_path = _save_upload(file)
+        return jsonify(analyze_image(tmp_path, cfg))
+    except ImageReadError:
+        return _error(MSG_UNREADABLE)
+    except Exception as exc:
+        return _error(f"Nie można przeanalizować obrazu: {exc}", 500)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 @app.route("/convert", methods=["POST"])
 def convert():
     file = request.files.get("image")
-    if not file or not file.filename:
-        return jsonify({"error": "Nie przesłano pliku obrazu."}), 400
+    problem = _upload_problem(file)
+    if problem:
+        return _error(problem)
 
     form = request.form
-
-    def b(key, default=False):
-        v = form.get(key)
-        return default if v is None else v.lower() in ("true", "on", "1", "yes")
-
-    def i(key, default=0):
-        try:
-            return int(form.get(key, default))
-        except (ValueError, TypeError):
-            return default
-
-    def f(key, default=0.0):
-        try:
-            return float(form.get(key, default))
-        except (ValueError, TypeError):
-            return default
-
-    def s(key, default=""):
-        return (form.get(key) or default).strip()
-
-    formats = form.getlist("formats") or ["svg"]
-    bg = s("background", "#000000")
+    bg = _form_str(form, "background", "#000000")
     if not bg or bg.lower() in ("none", "transparent"):
         bg = None
+    chosen = [x for x in FORMATS if x in form.getlist("formats")] or ["svg"]
+    # SVG is always written for the preview, but only offered for saving if chosen
+    to_write = tuple(chosen) if "svg" in chosen else tuple(chosen) + ("svg",)
+
+    cfg = Config(
+        channel=_form_str(form, "channel", "luma"),
+        invert=_form_bool(form, "invert"),
+        threshold_mode=_form_str(form, "threshold_mode", "otsu"),
+        threshold_value=_form_int(form, "threshold_value", 128),
+        adaptive_block_size=_form_int(form, "adaptive_block_size", 31),
+        adaptive_C=_form_int(form, "adaptive_C", 5),
+        upscale=_form_int(form, "upscale", 2),
+        upscale_method=_form_str(form, "upscale_method", "cubic"),
+        pre_blur_sigma=_form_float(form, "pre_blur_sigma", 1.2),
+        morph_open=_form_int(form, "morph_open", 0),
+        morph_close=_form_int(form, "morph_close", 0),
+        dilate=_form_int(form, "dilate", 0),
+        erode=_form_int(form, "erode", 0),
+        min_area=_form_float(form, "min_area", 4.0),
+        include_holes=_form_bool(form, "include_holes", True),
+        contour_sigma=_form_float(form, "contour_sigma", 2.0),
+        resample_spacing=_form_float(form, "resample_spacing", 4.0),
+        output_mode=_form_str(form, "output_mode", "bezier"),
+        detect_corners=_form_bool(form, "detect_corners"),
+        corner_angle_deg=_form_float(form, "corner_angle_deg", 60.0),
+        foreground=_form_str(form, "foreground", "#ffffff"),
+        background=bg,
+        coord_precision=_form_int(form, "coord_precision", 2),
+        dpi=_form_float(form, "dpi", 96.0),
+        formats=to_write,
+        # Fall back to original uploaded filename stem, never to the temp-file name
+        output_name=(_safe_stem(_form_str(form, "output_name"))
+                     or _safe_stem(Path(file.filename).stem) or "obraz"),
+    )
+    problems = _validate(cfg)
+    if problems:
+        return _error(" ".join(problems))
 
     session_id = str(uuid.uuid4())
     stage_dir = STAGING / session_id
     stage_dir.mkdir(parents=True, exist_ok=True)
+    cfg.output_dir = str(stage_dir)
 
-    cfg = Config(
-        channel=s("channel", "luma"),
-        invert=b("invert"),
-        threshold_mode=s("threshold_mode", "otsu"),
-        threshold_value=i("threshold_value", 128),
-        adaptive_block_size=i("adaptive_block_size", 31),
-        adaptive_C=i("adaptive_C", 5),
-        upscale=i("upscale", 2),
-        upscale_method=s("upscale_method", "cubic"),
-        pre_blur_sigma=f("pre_blur_sigma", 1.2),
-        morph_open=i("morph_open", 0),
-        morph_close=i("morph_close", 0),
-        dilate=i("dilate", 0),
-        erode=i("erode", 0),
-        min_area=f("min_area", 4.0),
-        include_holes=b("include_holes", True),
-        contour_sigma=f("contour_sigma", 2.0),
-        resample_spacing=f("resample_spacing", 4.0),
-        output_mode=s("output_mode", "bezier"),
-        detect_corners=b("detect_corners"),
-        corner_angle_deg=f("corner_angle_deg", 60.0),
-        foreground=s("foreground", "#ffffff"),
-        background=bg,
-        coord_precision=i("coord_precision", 2),
-        dpi=f("dpi", 96.0),
-        formats=tuple(formats),
-        output_dir=str(stage_dir),
-        # Fall back to original uploaded filename stem, never to the temp-file name
-        output_name=s("output_name") or Path(file.filename).stem or None,
-    )
-
-    suffix = Path(file.filename).suffix or ".png"
     tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            file.save(tmp.name)
-            tmp_path = tmp.name
-
+        tmp_path = _save_upload(file)
         written = vectorize(tmp_path, cfg)
 
-        svg_b64 = None
-        for p in written:
-            if p.suffix == ".svg":
-                svg_b64 = base64.b64encode(p.read_bytes()).decode()
-                break
+        svg = next((p for p in written if p.suffix == ".svg"), None)
+        svg_b64 = base64.b64encode(svg.read_bytes()).decode() if svg else None
+        if svg and "svg" not in chosen:
+            svg.unlink(missing_ok=True)
+            written = [p for p in written if p != svg]
 
         _sessions[session_id] = [str(p) for p in written]
 
@@ -233,9 +357,12 @@ def convert():
             "files": [{"path": str(p), "name": p.name} for p in written],
             "svg_b64": svg_b64,
         })
+    except ImageReadError:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+        return _error(MSG_UNREADABLE)
     except Exception as exc:
         shutil.rmtree(stage_dir, ignore_errors=True)
-        return jsonify({"error": str(exc)}), 500
+        return _error(f"Konwersja nie powiodła się: {exc}", 500)
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -276,8 +403,14 @@ def save():
                 shutil.copy2(src_p, dst)
                 saved.append({"path": str(dst), "name": dst.name})
         return jsonify({"success": True, "saved": saved})
+    except PermissionError:
+        return _error("Brak uprawnień do zapisu w wybranym folderze.", 500)
+    except (FileExistsError, NotADirectoryError):
+        return _error("Wskazana ścieżka nie jest folderem.", 500)
+    except OSError as exc:
+        return _error(f"Nie można zapisać plików: {exc.strerror or exc}", 500)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        return _error(f"Nie można zapisać plików: {exc}", 500)
 
 
 @app.route("/download")
